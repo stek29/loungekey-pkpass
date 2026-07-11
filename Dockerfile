@@ -13,10 +13,9 @@ RUN CGO_ENABLED=0 go build \
     -o /out/loungekey-pass \
     ./cmd/loungekey-pass
 
-RUN mkdir -p /out/rootfs/app /out/rootfs/etc/ssl/certs /out/rootfs/tmp \
+RUN mkdir -p /out/rootfs/etc/ssl/certs /out/rootfs/tmp \
     && chmod 1777 /out/rootfs/tmp \
-    && cp /etc/ssl/certs/ca-certificates.crt /out/rootfs/etc/ssl/certs/ca-certificates.crt \
-    && cp default_logo.png default_logo@2x.png /out/rootfs/app/
+    && cp /etc/ssl/certs/ca-certificates.crt /out/rootfs/etc/ssl/certs/ca-certificates.crt
 
 FROM scratch
 

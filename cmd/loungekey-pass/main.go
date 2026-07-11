@@ -40,6 +40,7 @@ func usage() { fmt.Fprintln(os.Stderr, "usage: loungekey-pass <generate|serve> [
 
 func generate(arguments []string) error {
 	flags := flag.NewFlagSet("generate", flag.ContinueOnError)
+	metadata := metadataFlags(flags)
 	envFile := flags.String("env-file", "account1.env", "LoungeKey credentials file")
 	manual := flags.Bool("manual", false, "use fields instead of fetching LoungeKey")
 	name := flags.String("name", "", "member name")
@@ -94,9 +95,11 @@ func generate(arguments []string) error {
 		}
 		account = mergeOverrides(fetched, account)
 	}
-	options := passkit.Options{}
+	options := passkit.Options{Metadata: *metadata}
 	if *webServiceURL != "" {
-		options = passkit.Options{SerialNumber: username, WebServiceURL: *webServiceURL, AuthenticationToken: passkit.PasswordToken(password)}
+		options.SerialNumber = username
+		options.WebServiceURL = *webServiceURL
+		options.AuthenticationToken = passkit.PasswordToken(password)
 	}
 	if err := passkit.Build(account, options, *output, *assets); err != nil {
 		return err
@@ -107,18 +110,23 @@ func generate(arguments []string) error {
 
 func serve(arguments []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	metadata := metadataFlags(flags)
+	assetsDir := flags.String("assets", os.Getenv("PASS_ASSETS_DIR"), "custom pass asset directory")
 	host := flags.String("host", "127.0.0.1", "listen address")
 	port := flags.Int("port", 8080, "listen port")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	handler := &refreshHandler{}
+	handler := &refreshHandler{metadata: *metadata, assetsDir: *assetsDir}
 	server := &http.Server{Addr: fmt.Sprintf("%s:%d", *host, *port), Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("Listening on http://%s", server.Addr)
 	return server.ListenAndServe()
 }
 
-type refreshHandler struct{}
+type refreshHandler struct {
+	metadata  passkit.Metadata
+	assetsDir string
+}
 
 func (h *refreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
@@ -142,7 +150,7 @@ func (h *refreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *refreshHandler) refreshPass(w http.ResponseWriter, r *http.Request) {
-	prefix := "/v1/passes/" + passkit.PassTypeIdentifier + "/"
+	prefix := "/v1/passes/" + h.passMetadata().PassTypeIdentifier + "/"
 	if !strings.HasPrefix(r.URL.Path, prefix) {
 		writeJSONResponse(w, http.StatusNotFound, `{"error":"not found"}`)
 		return
@@ -181,13 +189,13 @@ func (h *refreshHandler) refreshPass(w http.ResponseWriter, r *http.Request) {
 	path := temp.Name()
 	temp.Close()
 	defer os.Remove(path)
-	if err := passkit.Build(account, passkit.Options{SerialNumber: username, WebServiceURL: requestOrigin(r), AuthenticationToken: passkit.PasswordToken(password)}, path, ""); err != nil {
+	if err := passkit.Build(account, passkit.Options{SerialNumber: username, WebServiceURL: requestOrigin(r), AuthenticationToken: passkit.PasswordToken(password), Metadata: h.passMetadata()}, path, h.assetsDir); err != nil {
 		log.Printf("build pass: %v", err)
 		writeJSONResponse(w, 500, `{"error":"could not build pass"}`)
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.pkpass")
-	w.Header().Set("Content-Disposition", `attachment; filename="loungekey.pkpass"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="lounge-access.pkpass"`)
 	w.Header().Set("Cache-Control", "no-store")
 	http.ServeFile(w, r, path)
 }
@@ -227,8 +235,8 @@ func (h *refreshHandler) generatePass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.Remove(path)
-	options := passkit.Options{SerialNumber: username, WebServiceURL: requestOrigin(r), AuthenticationToken: passkit.PasswordToken(password)}
-	if err := passkit.Build(account, options, path, ""); err != nil {
+	options := passkit.Options{SerialNumber: username, WebServiceURL: requestOrigin(r), AuthenticationToken: passkit.PasswordToken(password), Metadata: h.passMetadata()}
+	if err := passkit.Build(account, options, path, h.assetsDir); err != nil {
 		log.Printf("build initial pass: %v", err)
 		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
 		return
@@ -245,9 +253,16 @@ func (h *refreshHandler) generatePass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.pkpass")
-	w.Header().Set("Content-Disposition", `attachment; filename="loungekey.pkpass"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="lounge-access.pkpass"`)
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeContent(w, r, "loungekey.pkpass", info.ModTime(), file)
+	http.ServeContent(w, r, "lounge-access.pkpass", info.ModTime(), file)
+}
+
+func (h *refreshHandler) passMetadata() passkit.Metadata {
+	if h.metadata.PassTypeIdentifier == "" {
+		return passkit.DefaultMetadata()
+	}
+	return h.metadata
 }
 
 func (h *refreshHandler) serveForm(w http.ResponseWriter, status int, message, username string) {
@@ -288,7 +303,7 @@ var passForm = template.Must(template.New("pass-form").Parse(`<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LoungeKey Pass</title>
+  <title>Lounge Access Pass</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f3f5f4; color: #24342d; }
@@ -304,7 +319,7 @@ var passForm = template.Must(template.New("pass-form").Parse(`<!doctype html>
 </head>
 <body>
   <main>
-    <h1>LoungeKey Pass</h1>
+    <h1>Lounge Access Pass</h1>
     <p>Sign in to generate an updateable wallet pass.</p>
     {{if .Message}}<p class="error" role="alert">{{.Message}}</p>{{end}}
     <form method="post" action="/generate">
@@ -342,6 +357,24 @@ func readEnv(path string) (map[string]string, error) {
 	}
 	return values, nil
 }
+
+func metadataFlags(flags *flag.FlagSet) *passkit.Metadata {
+	defaults := passkit.DefaultMetadata()
+	metadata := &passkit.Metadata{}
+	flags.StringVar(&metadata.PassTypeIdentifier, "pass-type-identifier", envOr("PASS_TYPE_IDENTIFIER", defaults.PassTypeIdentifier), "Pass Type ID")
+	flags.StringVar(&metadata.TeamIdentifier, "team-identifier", envOr("PASS_TEAM_IDENTIFIER", defaults.TeamIdentifier), "Apple Developer Team ID")
+	flags.StringVar(&metadata.OrganizationName, "organization-name", envOr("PASS_ORGANIZATION_NAME", defaults.OrganizationName), "pass organization name")
+	flags.StringVar(&metadata.Description, "pass-description", envOr("PASS_DESCRIPTION", defaults.Description), "pass description")
+	return metadata
+}
+
+func envOr(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func mergeOverrides(value, override loungekey.Account) loungekey.Account {
 	if override.Name != "" {
 		value.Name = override.Name

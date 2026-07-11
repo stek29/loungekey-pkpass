@@ -41,7 +41,7 @@ LOUNGEKEY_PASSWORD=your_password
 ./loungekey-pass serve --host 0.0.0.0 --port 8080
 ```
 
-Wallet запрашивает `GET /v1/passes/pass.com.loungekey.membership/{username}`. Username хранится как `serialNumber`, пароль — в стандартном заголовке `Authorization: ApplePass …` в base64url. Сервер stateless и ничего не сохраняет.
+Wallet запрашивает `GET /v1/passes/pass.rocks.stek29.lounge-access/{username}`. Username хранится как `serialNumber`, пароль — в стандартном заголовке `Authorization: ApplePass …` в base64url. Сервер stateless и ничего не сохраняет.
 
 `webServiceURL` всегда определяется из origin входящего HTTP-запроса. За reverse proxy сервер использует `X-Forwarded-Proto` и `X-Forwarded-Host`; отдельная настройка публичного URL не требуется.
 
@@ -55,6 +55,57 @@ https://passes.example.com/
 
 Проверка состояния: `GET /healthz`.
 
+## Метаданные pass
+
+По умолчанию используются независимые идентификаторы и нейтральный branding:
+
+```text
+passTypeIdentifier = pass.rocks.stek29.lounge-access
+organizationName   = stek29
+description        = Lounge Access Pass
+teamIdentifier     = XXXXXXXXXX
+```
+
+Перед Apple signing задайте настоящий Team ID и Pass Type ID через `PASS_TEAM_IDENTIFIER` и `PASS_TYPE_IDENTIFIER`. Также доступны `PASS_ORGANIZATION_NAME` и `PASS_DESCRIPTION`. Для CLI каждому значению соответствует флаг `--team-identifier`, `--pass-type-identifier`, `--organization-name` или `--pass-description`.
+
+### Опциональный официальный логотип
+
+По умолчанию приложение не загружает и не включает сторонние логотипы. Кастомные pass assets можно подготовить отдельно и передать через `--assets` или `PASS_ASSETS_DIR`. Сервер не скачивает их и не управляет кешем.
+
+Пример подготовки assets с логотипом, который сейчас используется официальным сайтом LoungeKey (нужны `curl` и ImageMagick):
+
+```bash
+mkdir -p assets
+curl --fail --location \
+  'https://d25xpw488bmti5.cloudfront.net/Default/Shared/DevDemo/Global/Logos/LK-logo-small-31f0203d-5bd1-4186-97cd-d4bcc6050043.webp?h=73&la=en&w=200' \
+  --output /tmp/loungekey-logo.webp
+
+magick -size 58x58 xc:none assets/icon.png
+magick -size 116x116 xc:none assets/icon@2x.png
+magick -size 375x3 'xc:#009245' assets/strip.png
+magick -size 750x6 'xc:#009245' assets/strip@2x.png
+magick /tmp/loungekey-logo.webp -resize '160x58>' -gravity center -background none -extent 160x58 assets/logo.png
+magick /tmp/loungekey-logo.webp -resize '320x116>' -gravity center -background none -extent 320x116 assets/logo@2x.png
+rm /tmp/loungekey-logo.webp
+```
+
+Использование с локальным сервером:
+
+```bash
+./loungekey-pass serve --assets ./assets --host 0.0.0.0 --port 8080
+```
+
+Или с Docker:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v "$PWD/assets:/assets:ro" \
+  -e PASS_ASSETS_DIR=/assets \
+  loungekey-pkpass
+```
+
+Внешний URL и изображение контролируются их владельцем и могут измениться. LoungeKey является товарным знаком соответствующего правообладателя. Проект независим и не связан с LoungeKey, не одобрен и не спонсируется им.
+
 ## Docker
 
 Собрать и запустить контейнер:
@@ -67,10 +118,6 @@ docker run --rm -p 8080:8080 loungekey-pkpass
 После запуска форма доступна на `http://localhost:8080/`. Для работы за reverse proxy передавайте `X-Forwarded-Proto` и `X-Forwarded-Host`, чтобы pass получил внешний HTTPS origin.
 
 GitHub Actions проверяет Go-код и сборку контейнера для каждого push/PR. Push в `main`/`master` и теги `v*` публикуют multi-arch образ в `ghcr.io/stek29/loungekey-pkpass` с тегами `latest`, semver и `sha-*`.
-
-## Логотип
-
-`default_logo.png` и `default_logo@2x.png` принадлежат LoungeKey Limited / Collinson Group, используются только для персональных passes и не покрываются лицензией проекта.
 
 ## Лицензия
 

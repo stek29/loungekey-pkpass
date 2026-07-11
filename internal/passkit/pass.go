@@ -21,9 +21,33 @@ import (
 	"github.com/stek29/loungekey-pkpass/internal/loungekey"
 )
 
-const PassTypeIdentifier = "pass.com.loungekey.membership"
+const (
+	DefaultPassTypeIdentifier = "pass.rocks.stek29.lounge-access"
+	DefaultTeamIdentifier     = "XXXXXXXXXX"
+	DefaultOrganizationName   = "stek29"
+	DefaultDescription        = "Lounge Access Pass"
+)
 
-type Options struct{ SerialNumber, WebServiceURL, AuthenticationToken string }
+type Metadata struct {
+	PassTypeIdentifier string
+	TeamIdentifier     string
+	OrganizationName   string
+	Description        string
+}
+
+func DefaultMetadata() Metadata {
+	return Metadata{
+		PassTypeIdentifier: DefaultPassTypeIdentifier,
+		TeamIdentifier:     DefaultTeamIdentifier,
+		OrganizationName:   DefaultOrganizationName,
+		Description:        DefaultDescription,
+	}
+}
+
+type Options struct {
+	SerialNumber, WebServiceURL, AuthenticationToken string
+	Metadata                                         Metadata
+}
 
 func PasswordToken(password string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(password))
@@ -67,6 +91,20 @@ func Build(account loungekey.Account, options Options, output, assetsDir string)
 }
 
 func makePass(a loungekey.Account, o Options) (map[string]any, error) {
+	metadata := o.Metadata
+	defaults := DefaultMetadata()
+	if metadata.PassTypeIdentifier == "" {
+		metadata.PassTypeIdentifier = defaults.PassTypeIdentifier
+	}
+	if metadata.TeamIdentifier == "" {
+		metadata.TeamIdentifier = defaults.TeamIdentifier
+	}
+	if metadata.OrganizationName == "" {
+		metadata.OrganizationName = defaults.OrganizationName
+	}
+	if metadata.Description == "" {
+		metadata.Description = defaults.Description
+	}
 	if len(a.CardLast4) != 4 {
 		return nil, errors.New("card-last4 must be exactly 4 digits")
 	}
@@ -95,8 +133,8 @@ func makePass(a loungekey.Account, o Options) (map[string]any, error) {
 		serial = a.LoungeNumber
 	}
 	p := map[string]any{
-		"description": "LoungeKey Membership", "formatVersion": 1, "organizationName": "LoungeKey",
-		"passTypeIdentifier": PassTypeIdentifier, "serialNumber": serial, "teamIdentifier": "XXXXXXXXXX",
+		"description": metadata.Description, "formatVersion": 1, "organizationName": metadata.OrganizationName,
+		"passTypeIdentifier": metadata.PassTypeIdentifier, "serialNumber": serial, "teamIdentifier": metadata.TeamIdentifier,
 		"foregroundColor": "rgb(52, 73, 94)", "backgroundColor": "rgb(255, 255, 255)", "labelColor": "rgb(52, 73, 94)", "logoText": "",
 		"barcode": map[string]any{"message": a.QRMessage, "format": "PKBarcodeFormatQR", "messageEncoding": "iso-8859-1"},
 		"generic": map[string]any{
@@ -163,22 +201,12 @@ func createAssets(dir string) error {
 			return err
 		}
 	}
-	for _, name := range []string{"logo.png", "logo@2x.png"} {
-		source := "default_" + name
-		if _, err := os.Stat(source); err == nil {
-			if err := copyFile(source, filepath.Join(dir, name)); err != nil {
-				return err
-			}
-		} else {
-			size := 160
-			height := 58
-			if strings.Contains(name, "@2x") {
-				size = 320
-				height = 116
-			}
-			if err := writePNG(filepath.Join(dir, name), size, height, transparent); err != nil {
-				return err
-			}
+	for name, size := range map[string]image.Point{
+		"logo.png":    {X: 160, Y: 58},
+		"logo@2x.png": {X: 320, Y: 116},
+	} {
+		if err := writePNG(filepath.Join(dir, name), size.X, size.Y, transparent); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -196,23 +224,6 @@ func writePNG(path string, w, h int, c color.Color) error {
 		}
 	}
 	return png.Encode(f, img)
-}
-func copyFile(source, destination string) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(destination)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
 }
 func manifest(dir string) (map[string]string, error) {
 	entries, err := os.ReadDir(dir)

@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.node.json",
+    "build:cloudflare": "npm run prepare:worker-assets",
     "check": "biome check . && tsc --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "deploy": "wrangler deploy --strict",
     "dev": "wrangler dev",
+    "prepare:worker-assets": "node scripts/prepare-worker-assets.mjs",
     "start": "node dist/node.js",
     "test": "vitest run",
     "test:worker": "vitest run --config vitest.worker.config.ts"
@@ -22,6 +24,7 @@
     "@cloudflare/vitest-pool-workers": "0.18.4",
     "@cloudflare/workers-types": "5.20260711.1",
     "@types/node": "24.13.3",
+    "sharp": "0.34.5",
     "typescript": "7.0.2",
     "vitest": "4.1.10",
     "wrangler": "4.110.0"

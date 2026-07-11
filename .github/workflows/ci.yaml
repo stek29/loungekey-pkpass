@@ -58,3 +58,22 @@ jobs:
           tags: loungekey-pkpass:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-worker:
+    name: Deploy Cloudflare Worker
+    if: github.event_name == 'push'
+    needs:
+      - test
+      - docker
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+
+    steps:
+      - name: Trigger Cloudflare deployment
+        env:
+          DEPLOY_HOOK: ${{ secrets.CLOUDFLARE_DEPLOY_HOOK }}
+        run: |
+          test -n "$DEPLOY_HOOK"
+          curl --fail --silent --show-error --request POST "$DEPLOY_HOOK"

@@ -1,6 +1,7 @@
 *.env
 *.pkpass
 .assets.local/
+.assets.deploy/
 .wrangler/
 .wrangler-dist/
 coverage/

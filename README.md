@@ -79,6 +79,37 @@ Colors use Wallet's `rgb(red, green, blue)` notation with channels from 0 to
 
 No database, KV namespace, R2 bucket, Durable Object, or secret is required.
 
+### Cloudflare Builds deployment
+
+The production GitHub Actions job calls a Worker-specific Cloudflare deploy
+hook after the test and Docker jobs pass. Configure the connected Worker's
+build settings as follows:
+
+```text
+Build command:  npm run build:cloudflare
+Deploy command: npm run deploy -- --name "$CLOUDFLARE_WORKER_NAME" --assets ./.assets.deploy
+Node version:   24
+```
+
+Add these Cloudflare build variables:
+
+```text
+CLOUDFLARE_WORKER_NAME    the exact connected Worker name
+LOUNGEKEY_LOGO_URL        HTTPS URL of the source SVG
+LOUNGEKEY_LOGO_SHA256     approved SHA-256 hex digest of the SVG
+NODE_VERSION              24
+```
+
+`build:cloudflare` verifies the download, generates both PNG logo sizes, and
+copies the neutral default icons into `.assets.deploy`. Generated logos are
+cached beneath npm's cache directory using a hash of both the URL and approved
+content digest; enable the Worker project's build cache so Cloudflare preserves
+that cache between builds.
+
+Create a deploy hook for the production branch and save its complete URL as the
+`CLOUDFLARE_DEPLOY_HOOK` secret in a GitHub environment named `production`.
+GitHub receives no account-wide Cloudflare API token.
+
 ## Docker
 
 Build and run the Node.js 24 LTS image:

@@ -41,6 +41,11 @@ Generated pass responses are marked `private` and `no-store` for clients,
 proxies, and Cloudflare so every refresh reaches LoungeKey. Health check:
 `GET /healthz`.
 
+Known LoungeKey benefit packages also add entitlement and visit summaries to
+the back of the pass. LoungeKey notes that visit history can take 3–5 days to
+appear and only includes the last 18 months. Unknown packages skip these
+optional requests and still produce a basic pass.
+
 ## Cloudflare Workers
 
 Requirements: Node.js 24 LTS, npm, and an authenticated Wrangler installation.

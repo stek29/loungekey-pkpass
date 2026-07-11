@@ -6,16 +6,21 @@ import { handleRequest, requestOrigin } from "../src/app.js";
 import {
   CookieJar,
   decodeQrDataUrl,
+  detectAccountType,
+  fetchAccount,
+  parseBenefits,
   parseDashboard,
+  parseVisitHistory,
 } from "../src/loungekey.js";
 import {
   type AssetProvider,
   defaultAppearance,
   defaultMetadata,
+  type Entitlement,
   type RuntimeConfig,
   resolveAppearance,
 } from "../src/model.js";
-import { buildPass } from "../src/pass.js";
+import { buildPass, makePassJson } from "../src/pass.js";
 import { decodePasswordToken, passwordToken } from "../src/token.js";
 
 const account = {
@@ -25,6 +30,8 @@ const account = {
   expiration: "2030-01-01",
   dateAdded: "2025-01-02",
   qrMessage: "fixture-qr-payload",
+  entitlement: { type: "unknown" } as const,
+  lastUpdated: "2026-07-11T11:17:00.000Z",
 };
 
 class MemoryAssets implements AssetProvider {
@@ -72,19 +79,197 @@ it("decodes the harmless JPEG QR fixture", async () => {
   expect(await decodeQrDataUrl(dataUrl)).toBe("fixture-qr-payload");
 });
 
-it("parses a LoungeKey dashboard fixture", async () => {
+async function dashboardFixture(): Promise<string> {
   const jpeg = await readFile(new URL("fixtures/qr.jpg", import.meta.url));
-  const html = `<ul>
+  return `<ul>
     <li><strong>Name on card</strong> Example Member</li>
     <li><strong>Lounge Access Number</strong> 123456789</li>
     <li><strong>Card Details</strong> Visa ending 1234</li>
     <li><strong>Card Expiration Date</strong> 01 Jan 2030</li>
     <li><strong>Date Card Added</strong> 02 Jan 2025</li>
-  </ul><img class="qr-code" src="data:image/jpeg;base64,${jpeg.toString("base64")}">`;
-  expect(await parseDashboard(html)).toEqual(account);
+  </ul><p>Extra visits or guests are charged at US$35 per visit.</p>
+  <img class="qr-code" src="data:image/jpeg;base64,${jpeg.toString("base64")}">`;
+}
+
+it("parses a LoungeKey dashboard fixture", async () => {
+  const html = await dashboardFixture();
+  expect(
+    await parseDashboard(html, { type: "unknown" }, account.lastUpdated),
+  ).toEqual(account);
   await expect(
     parseDashboard(html.replace("01 Jan 2030", "31 Feb 2030")),
   ).rejects.toThrow("invalid LoungeKey date");
+});
+
+it("detects only explicitly supported account packages", () => {
+  expect(
+    detectAccountType(
+      new URL("https://www.loungekey.com/unlimitedch-kaz/dashboard/my-account"),
+    ),
+  ).toBe("unlimited");
+  expect(
+    detectAccountType(
+      new URL("https://www.loungekey.com/en/10ch-kaz/dashboard/my-account"),
+    ),
+  ).toBe("limited");
+  expect(
+    detectAccountType(
+      new URL("https://www.loungekey.com/en/20ch-kaz/dashboard/my-account"),
+    ),
+  ).toBe("unknown");
+  expect(
+    detectAccountType(new URL("https://www.loungekey.com/en/account")),
+  ).toBe("unknown");
+});
+
+it("parses explicit remaining benefits and visit history", () => {
+  expect(
+    parseBenefits(`
+      <span>ENTITLEMENT</span><span>Ends: 31 Dec 2026</span>
+      <article><h3>Member visits</h3>
+        <div class="entitlement-graph" data-available="7"></div>
+        <span><span class="counter">0</span><span>Remaining</span></span>
+      </article>`),
+  ).toEqual({ remainingVisits: 7, ends: "2026-12-31" });
+  expect(
+    parseVisitHistory(`<table>
+      <tr><th>Visit date</th><th>Lounge Code</th><th>Total customer &amp; guest visits</th></tr>
+      <tr><td>10 Jul 2026</td><td><span class="table-tooltip-text">ALA3</span><span>Extime Business Lounge - ALA3</span></td><td>2</td></tr>
+      <tr><td>12 Jan 2026</td><td>LHR1</td><td>1</td></tr>
+      <tr><td>11 Jul 2026</td><td>DXB2</td><td>3</td></tr>
+    </table>`),
+  ).toEqual({
+    recordedVisits: 6,
+    lastVisit: { date: "2026-07-11", loungeCode: "DXB2" },
+  });
+  expect(parseVisitHistory("<p>No visits found.</p>")).toEqual({
+    recordedVisits: 0,
+  });
+});
+
+it("enriches known packages and skips enrichment for unknown packages", async () => {
+  const html = await dashboardFixture();
+  const benefits = `<p>Ends: 31 Dec 2026</p><article>
+    <h3>Member visits</h3>
+    <div class="entitlement-graph" data-available="4"></div>
+    <p>0 Remaining</p>
+  </article>`;
+  const history = `<table>
+    <tr><th>Visit date</th><th>Lounge Code</th><th>Total customer &amp; guest visits</th></tr>
+    <tr><td>10 Jul 2026</td><td>ALA3</td><td>6</td></tr>
+  </table>`;
+  const requested: string[] = [];
+  const fetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url === "https://www.loungekey.com/en/login")
+      return new Response("login");
+    if (url.includes("/api/loungekey/"))
+      return Response.json({
+        Success: true,
+        RedirectUrl: "/en/10ch-kaz/dashboard/my-account",
+      });
+    if (url.endsWith("/my-account")) return new Response(html);
+    if (url.endsWith("/my-benefits")) return new Response(benefits);
+    if (url.endsWith("/visit-history")) return new Response(history);
+    return new Response("not found", { status: 404 });
+  };
+  const result = await fetchAccount(fetcher, "member", "secret");
+  expect(result.entitlement).toEqual({
+    type: "limited",
+    remainingVisits: 4,
+    ends: "2026-12-31",
+    recordedVisits: 6,
+    lastVisit: { date: "2026-07-10", loungeCode: "ALA3" },
+    additionalVisitFee: "US$35 per visit",
+  });
+  expect(requested.some((url) => url.endsWith("/my-benefits"))).toBe(true);
+  expect(requested.some((url) => url.endsWith("/visit-history"))).toBe(true);
+
+  requested.length = 0;
+  const unknownFetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url === "https://www.loungekey.com/en/login")
+      return new Response("login");
+    if (url.includes("/api/loungekey/"))
+      return Response.json({
+        Success: true,
+        RedirectUrl: "/en/future-package/dashboard/my-account",
+      });
+    return new Response(html);
+  };
+  expect(
+    (await fetchAccount(unknownFetcher, "member", "secret")).entitlement,
+  ).toEqual({ type: "unknown" });
+  expect(requested).toHaveLength(3);
+});
+
+it("falls back when optional benefits are unavailable", async () => {
+  const html = await dashboardFixture();
+  const fetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url === "https://www.loungekey.com/en/login")
+      return new Response("login");
+    if (url.includes("/api/loungekey/"))
+      return Response.json({
+        Success: true,
+        RedirectUrl: "/10ch-kaz/dashboard/my-account",
+      });
+    if (url.endsWith("/my-account")) return new Response(html);
+    return new Response("unavailable", { status: 503 });
+  };
+  expect((await fetchAccount(fetcher, "member", "secret")).entitlement).toEqual(
+    { type: "unknown" },
+  );
+});
+
+it("orders front and back fields for each entitlement type", () => {
+  const pass = (entitlement: Entitlement) =>
+    makePassJson(
+      { ...account, entitlement },
+      {
+        serialNumber: "serial",
+        webServiceUrl: "https://passes.example",
+        authenticationToken: "token",
+        metadata: defaultMetadata,
+        appearance: defaultAppearance,
+      },
+    ).generic as {
+      headerFields: Array<{ key: string }>;
+      secondaryFields: Array<{ key: string }>;
+      backFields: Array<{ key: string }>;
+    };
+  const unlimited = pass({
+    type: "unlimited",
+    recordedVisits: 1,
+    lastVisit: { date: "2026-07-10", loungeCode: "ALA3" },
+    guestFee: "US$35 per visit",
+  });
+  expect(unlimited.headerFields.map(({ key }) => key)).toEqual(["cardOnFile"]);
+  expect(unlimited.secondaryFields.map(({ key }) => key)).toEqual([
+    "loungeNumber",
+    "expiration",
+    "dateAdded",
+  ]);
+  expect(unlimited.backFields.map(({ key }) => key)).toEqual([
+    "access",
+    "recordedVisits",
+    "lastVisit",
+    "visitFee",
+    "lastUpdated",
+  ]);
+  expect(
+    pass({
+      type: "limited",
+      remainingVisits: 10,
+      ends: "2026-12-31",
+      recordedVisits: 0,
+    }).backFields.map(({ key }) => key),
+  ).toEqual(["access", "recordedVisits", "entitlementEnds", "lastUpdated"]);
+  expect(pass({ type: "unknown" }).backFields.map(({ key }) => key)).toEqual([
+    "lastUpdated",
+  ]);
 });
 
 it("normalizes and validates configurable pass colors", () => {

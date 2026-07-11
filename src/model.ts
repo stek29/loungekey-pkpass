@@ -5,7 +5,30 @@ export interface Account {
   expiration: string;
   dateAdded: string;
   qrMessage: string;
+  entitlement: Entitlement;
+  lastUpdated: string;
 }
+
+export interface VisitSummary {
+  recordedVisits: number;
+  lastVisit?: {
+    date: string;
+    loungeCode: string;
+  };
+}
+
+export type Entitlement =
+  | ({
+      type: "unlimited";
+      guestFee?: string;
+    } & Partial<VisitSummary>)
+  | ({
+      type: "limited";
+      remainingVisits: number;
+      ends: string;
+      additionalVisitFee?: string;
+    } & Partial<VisitSummary>)
+  | { type: "unknown" };
 
 export interface PassMetadata {
   passTypeIdentifier: string;

@@ -63,6 +63,67 @@ export function makePassJson(
     textAlignment: "PKTextAlignmentCenter",
     ignoresTimeZone: true,
   });
+  const backFields: Record<string, unknown>[] = [];
+  const textField = (key: string, label: string, value: string | number) => ({
+    key,
+    label,
+    value,
+  });
+  const entitlement = account.entitlement;
+  if (entitlement.type === "unlimited") {
+    backFields.push(textField("access", "Access", "Unlimited"));
+  } else if (entitlement.type === "limited") {
+    backFields.push(
+      textField(
+        "access",
+        "Access",
+        `${entitlement.remainingVisits} visits remaining`,
+      ),
+    );
+  }
+  if (entitlement.type !== "unknown") {
+    if (entitlement.recordedVisits !== undefined)
+      backFields.push(
+        textField(
+          "recordedVisits",
+          "Recorded Visits",
+          entitlement.recordedVisits,
+        ),
+      );
+    if (entitlement.lastVisit)
+      backFields.push(
+        textField(
+          "lastVisit",
+          "Last Visit",
+          `${formatDate(entitlement.lastVisit.date)} · ${entitlement.lastVisit.loungeCode}`,
+        ),
+      );
+    if (entitlement.type === "limited")
+      backFields.push(
+        dateField("entitlementEnds", "Entitlement Ends", entitlement.ends),
+      );
+    const fee =
+      entitlement.type === "unlimited"
+        ? entitlement.guestFee
+        : entitlement.additionalVisitFee;
+    if (fee)
+      backFields.push(
+        textField(
+          "visitFee",
+          entitlement.type === "unlimited"
+            ? "Guest Visits"
+            : "Additional Visits / Guests",
+          fee,
+        ),
+      );
+  }
+  backFields.push({
+    key: "lastUpdated",
+    label: "Last Updated",
+    value: account.lastUpdated,
+    dateStyle: "PKDateStyleMedium",
+    timeStyle: "PKDateStyleShort",
+  });
   return {
     description: options.metadata.description,
     formatVersion: 1,
@@ -105,10 +166,20 @@ export function makePassJson(
         dateField("expiration", "Card Expiration Date", account.expiration),
         dateField("dateAdded", "Date Card Added", account.dateAdded),
       ],
+      backFields,
     },
     webServiceURL: options.webServiceUrl.replace(/\/+$/, ""),
     authenticationToken: options.authenticationToken,
   };
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${value}T00:00:00Z`));
 }
 
 function validateAccount(account: Account): void {
@@ -125,6 +196,8 @@ function validateAccount(account: Account): void {
       throw new Error(`invalid ${name}`);
     }
   }
+  if (Number.isNaN(Date.parse(account.lastUpdated)))
+    throw new Error("invalid lastUpdated");
 }
 
 async function sha1(data: Uint8Array): Promise<string> {

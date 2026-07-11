@@ -1,7 +1,7 @@
 import type { Element } from "domhandler";
 import { DomUtils, parseDocument } from "htmlparser2";
 import { prepareZXingModule, readBarcodes } from "zxing-wasm/reader";
-import type { Account } from "./model.js";
+import type { Account, Entitlement, VisitSummary } from "./model.js";
 
 const loginUrl = "https://www.loungekey.com/en/login";
 const loginApiUrl =
@@ -121,10 +121,47 @@ export async function fetchAccount(
   const dashboard = await loungeFetch(fetcher, jar, dashboardUrl.href);
   if (!dashboard.ok)
     throw new Error(`LoungeKey dashboard returned ${dashboard.status}`);
-  return parseDashboard(await dashboard.text());
+  const dashboardHtml = await dashboard.text();
+  const packageType = detectAccountType(dashboardUrl);
+  let entitlement: Entitlement = { type: "unknown" };
+  if (packageType === "unlimited") {
+    const visits = await fetchVisits(fetcher, jar, dashboardUrl);
+    entitlement = {
+      type: "unlimited",
+      ...visits,
+      ...optionalValue("guestFee", parseVisitFee(dashboardHtml)),
+    };
+  } else if (packageType === "limited") {
+    const benefits = await fetchBenefits(fetcher, jar, dashboardUrl);
+    if (benefits) {
+      const visits = await fetchVisits(fetcher, jar, dashboardUrl);
+      entitlement = {
+        type: "limited",
+        ...benefits,
+        ...visits,
+        ...optionalValue("additionalVisitFee", parseVisitFee(dashboardHtml)),
+      };
+    }
+  }
+  return parseDashboard(dashboardHtml, entitlement, new Date().toISOString());
 }
 
-export async function parseDashboard(html: string): Promise<Account> {
+export type AccountType = "unlimited" | "limited" | "unknown";
+
+export function detectAccountType(url: URL): AccountType {
+  const match = /^\/(?:[a-z]{2}\/)?([^/]+)\/dashboard\/my-account\/?$/.exec(
+    url.pathname,
+  );
+  if (match?.[1] === "unlimitedch-kaz") return "unlimited";
+  if (match?.[1] === "10ch-kaz") return "limited";
+  return "unknown";
+}
+
+export async function parseDashboard(
+  html: string,
+  entitlement: Entitlement = { type: "unknown" },
+  lastUpdated = new Date().toISOString(),
+): Promise<Account> {
   const document = parseDocument(html);
   const elements = DomUtils.findAll(() => true, document.children).filter(
     (node): node is Element => node.type === "tag",
@@ -166,7 +203,168 @@ export async function parseDashboard(html: string): Promise<Account> {
     expiration: parseWebsiteDate(field("Card Expiration Date")),
     dateAdded: parseWebsiteDate(field("Date Card Added")),
     qrMessage: await decodeQrDataUrl(source),
+    entitlement,
+    lastUpdated,
   };
+}
+
+async function fetchBenefits(
+  fetcher: typeof fetch,
+  jar: CookieJar,
+  dashboardUrl: URL,
+): Promise<
+  | Pick<Extract<Entitlement, { type: "limited" }>, "remainingVisits" | "ends">
+  | undefined
+> {
+  try {
+    const response = await loungeFetch(
+      fetcher,
+      jar,
+      new URL("my-benefits", dashboardUrl).href,
+    );
+    if (!response.ok) return undefined;
+    return parseBenefits(await response.text());
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchVisits(
+  fetcher: typeof fetch,
+  jar: CookieJar,
+  dashboardUrl: URL,
+): Promise<Partial<VisitSummary>> {
+  try {
+    const response = await loungeFetch(
+      fetcher,
+      jar,
+      new URL("visit-history", dashboardUrl).href,
+    );
+    if (!response.ok) return {};
+    return parseVisitHistory(await response.text());
+  } catch {
+    return {};
+  }
+}
+
+export function parseBenefits(
+  html: string,
+): Pick<Extract<Entitlement, { type: "limited" }>, "remainingVisits" | "ends"> {
+  const document = parseDocument(html);
+  const texts = elementTexts(html);
+  const memberArticle = DomUtils.findOne((node) => {
+    if (node.type !== "tag" || (node as Element).name !== "article")
+      return false;
+    const heading = DomUtils.findOne(
+      (child) => child.type === "tag" && (child as Element).name === "h3",
+      (node as Element).children,
+    );
+    return normalize(DomUtils.textContent(heading ?? [])) === "Member visits";
+  }, document.children);
+  const graph = memberArticle
+    ? DomUtils.findOne(
+        (node) =>
+          node.type === "tag" &&
+          (node as Element).attribs.class
+            ?.split(/\s+/)
+            .includes("entitlement-graph") === true,
+        memberArticle.children,
+      )
+    : undefined;
+  const remaining = graph?.attribs["data-available"];
+  const ends = texts
+    .map((text) => /Ends:\s*(\d{2} [A-Z][a-z]{2} \d{4})\b/.exec(text))
+    .find((match) => match?.[1]);
+  if (!remaining || !/^\d+$/.test(remaining) || !ends?.[1])
+    throw new Error("invalid LoungeKey benefits");
+  return {
+    remainingVisits: Number(remaining),
+    ends: parseWebsiteDate(ends[1]),
+  };
+}
+
+export function parseVisitHistory(html: string): VisitSummary {
+  const document = parseDocument(html);
+  const rows = DomUtils.findAll(
+    (node) => node.type === "tag" && (node as Element).name === "tr",
+    document.children,
+  );
+  let headers: string[] | undefined;
+  const visits: Array<{ date: string; loungeCode: string; total: number }> = [];
+  for (const row of rows) {
+    const cells = DomUtils.findAll(
+      (node) =>
+        node.type === "tag" &&
+        ((node as Element).name === "th" || (node as Element).name === "td"),
+      row.children,
+    );
+    const values = cells.map((cell) => normalize(DomUtils.textContent(cell)));
+    if (cells.some((cell) => cell.name === "th")) {
+      headers = values.map((value) => value.toLowerCase());
+      continue;
+    }
+    if (!headers || values.length === 0) continue;
+    const value = (heading: string): string | undefined => {
+      const index = headers?.indexOf(heading.toLowerCase()) ?? -1;
+      return index >= 0 ? values[index] : undefined;
+    };
+    const rawDate = value("Visit date");
+    const loungeIndex = headers.indexOf("lounge code");
+    const loungeCell = loungeIndex >= 0 ? cells[loungeIndex] : undefined;
+    const loungeLabel = loungeCell
+      ? DomUtils.findOne(
+          (node) =>
+            node.type === "tag" &&
+            (node as Element).attribs.class
+              ?.split(/\s+/)
+              .includes("table-tooltip-text") === true,
+          loungeCell.children,
+        )
+      : undefined;
+    const loungeCode = loungeLabel
+      ? normalize(DomUtils.textContent(loungeLabel))
+      : value("Lounge Code");
+    const rawTotal = value("Total customer & guest visits");
+    if (!rawDate || !loungeCode || !/^\d+$/.test(rawTotal ?? ""))
+      throw new Error("invalid LoungeKey visit history");
+    visits.push({
+      date: parseWebsiteDate(rawDate),
+      loungeCode,
+      total: Number(rawTotal),
+    });
+  }
+  const latest = visits.toSorted((left, right) =>
+    right.date.localeCompare(left.date),
+  )[0];
+  return {
+    recordedVisits: visits.reduce((sum, visit) => sum + visit.total, 0),
+    ...(latest
+      ? { lastVisit: { date: latest.date, loungeCode: latest.loungeCode } }
+      : {}),
+  };
+}
+
+function parseVisitFee(html: string): string | undefined {
+  const match = elementTexts(html)
+    .map((text) => /\bUS\$(\d+(?:\.\d{1,2})?)\b/.exec(text))
+    .find((candidate) => candidate?.[1]);
+  return match?.[1] ? `US$${match[1]} per visit` : undefined;
+}
+
+function elementTexts(html: string): string[] {
+  const document = parseDocument(html);
+  return DomUtils.findAll(() => true, document.children)
+    .filter((node): node is Element => node.type === "tag")
+    .map((element) => normalize(DomUtils.textContent(element)));
+}
+
+function optionalValue<Key extends string>(
+  key: Key,
+  value: string | undefined,
+): { [Property in Key]?: string } {
+  return value === undefined
+    ? {}
+    : ({ [key]: value } as { [Property in Key]: string });
 }
 
 function normalize(value: string): string {

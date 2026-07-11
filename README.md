@@ -54,6 +54,19 @@ https://passes.example.com/
 
 Проверка состояния: `GET /healthz`.
 
+## Docker
+
+Собрать и запустить контейнер:
+
+```bash
+docker build -t loungekey-pkpass .
+docker run --rm -p 8080:8080 loungekey-pkpass
+```
+
+После запуска форма доступна на `http://localhost:8080/`. Для работы за reverse proxy передавайте `X-Forwarded-Proto` и `X-Forwarded-Host`, чтобы pass получил внешний HTTPS origin.
+
+GitHub Actions проверяет Go-код и сборку контейнера для каждого push/PR. Push в `main`/`master` и теги `v*` публикуют multi-arch образ в `ghcr.io/stek29/loungekey-pkpass` с тегами `latest`, semver и `sha-*`.
+
 ## Логотип
 
 `default_logo.png` и `default_logo@2x.png` принадлежат LoungeKey Limited / Collinson Group, используются только для персональных passes и не покрываются лицензией проекта.

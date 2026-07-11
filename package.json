@@ -12,7 +12,7 @@
     "prepare:worker-assets": "node scripts/prepare-worker-assets.mjs",
     "start": "node dist/node.js",
     "test": "vitest run",
-    "test:worker": "vitest run --config vitest.worker.config.ts"
+    "test:worker": "npm run prepare:worker-assets && vitest run --config vitest.worker.config.ts"
   },
   "dependencies": {
     "fflate": "0.8.3",

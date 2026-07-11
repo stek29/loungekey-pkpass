@@ -10,7 +10,7 @@
     }
   ],
   "assets": {
-    "directory": "./assets/default",
+    "directory": "./.assets.deploy",
     "binding": "PASS_ASSETS",
     "run_worker_first": true
   },

@@ -55,12 +55,18 @@ npm ci
 npm run check
 npm test
 npm run test:worker
+npm run build:cloudflare
 npm run deploy -- --name <worker-name>
 ```
 
 The tracked Wrangler configuration contains no account ID, Worker name, route,
 domain, or credential. Wrangler deploys to the account selected by the invoking
 user. The Worker name is always supplied on the command line.
+
+`npm run build:cloudflare` must run before every deploy because Wrangler serves
+static assets from the generated `.assets.deploy/` directory. Run it without the
+LoungeKey logo environment variables to produce the neutral default assets, or
+with them to render the official branded logos.
 
 Pass metadata can be configured as Worker variables:
 
@@ -87,24 +93,24 @@ build settings as follows:
 
 ```text
 Build command:  npm run build:cloudflare
-Deploy command: npm run deploy -- --name "$CLOUDFLARE_WORKER_NAME" --assets ./.assets.deploy
+Deploy command: npm run deploy
 Node version:   24
 ```
 
 Add these Cloudflare build variables:
 
 ```text
-CLOUDFLARE_WORKER_NAME    the exact connected Worker name
-LOUNGEKEY_LOGO_URL        HTTPS URL of the source SVG
-LOUNGEKEY_LOGO_SHA256     approved SHA-256 hex digest of the SVG
+PASS_LOGO_URL             HTTPS URL of an optional SVG logo
 NODE_VERSION              24
 ```
 
-`build:cloudflare` verifies the download, generates both PNG logo sizes, and
-copies the neutral default icons into `.assets.deploy`. Generated logos are
-cached beneath npm's cache directory using a hash of both the URL and approved
-content digest; enable the Worker project's build cache so Cloudflare preserves
-that cache between builds.
+`build:cloudflare` generates assets in `.assets.deploy`. If `PASS_LOGO_URL` is
+set, the SVG is rendered to both PNG logo sizes; otherwise the neutral default
+logos are copied. If the remote logo cannot be fetched or rendered, the build
+falls back to the default assets.
+
+Enable the Worker project's build cache so Cloudflare preserves the npm
+dependencies cache between builds.
 
 Create a deploy hook for the production branch and save its complete URL as the
 `CLOUDFLARE_DEPLOY_HOOK` secret in a GitHub environment named `production`.
@@ -146,40 +152,26 @@ The repository contains neutral project-owned assets in `assets/default`.
 Passes contain `icon.png`, `icon@2x.png`, `logo.png`, and `logo@2x.png`; strip
 images are neither accepted nor generated.
 
-### Optional LoungeKey logo
+### Optional logo
 
-The following optional example downloads the logo referenced by Collinson's
-official website and creates an untracked `.assets.local` directory. It requires
-`curl` and ImageMagick. The downloaded artwork is controlled by its owner, is
-not distributed by this project, and is not covered by this project's license.
-Confirm that your intended use is permitted.
+Set `PASS_LOGO_URL` before running `npm run build:cloudflare` to render an
+optional logo from an HTTPS SVG URL:
 
-The explicit input density makes ImageMagick rasterize the SVG above the
-largest output size before downsampling, avoiding a blurry enlarged logo.
-
-```bash
-rm -rf .assets.local
-mkdir .assets.local
-cp assets/default/icon.png assets/default/icon@2x.png .assets.local/
-
-curl --fail --location \
-  'https://images.ctfassets.net/ibqmfcvkfft1/7yesdYfEm4oL7HlMgQ6lMY/626632627bcf816e2cba2d013de60e4d/LoungeKey_103x32.svg' \
-  --output /tmp/loungekey-logo.svg
-
-magick -density 384 -background none /tmp/loungekey-logo.svg -alpha on \
-  -resize '160x58' -gravity center -extent 160x58 .assets.local/logo.png
-magick -density 384 -background none /tmp/loungekey-logo.svg -alpha on \
-  -resize '320x116' -gravity center -extent 320x116 .assets.local/logo@2x.png
-rm /tmp/loungekey-logo.svg
+```text
+PASS_LOGO_URL             HTTPS URL of an optional SVG logo
 ```
 
-Deploy the Worker with those untracked assets:
+The downloaded artwork is controlled by its owner, is not distributed by this
+project, and is not covered by this project's license. Confirm that your intended
+use is permitted.
 
 ```bash
-npm run deploy -- --name <worker-name> --assets ./.assets.local
+PASS_LOGO_URL='https://example.com/logo.svg' \
+npm run build:cloudflare
+npm run deploy -- --name <worker-name>
 ```
 
-Mount the same directory into Docker:
+Mount the same generated assets into Docker:
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -187,6 +179,13 @@ docker run --rm -p 8080:8080 \
   -e PASS_ASSETS_DIR=/pass-assets \
   loungekey-pkpass
 ```
+
+### Local assets without Cloudflare Builds
+
+For local development or Docker, you can also use the `.assets.local`
+directory directly. Run `npm run build:cloudflare` and then copy the generated
+files to `.assets.local`, or set `PASS_LOGO_URL` and point Docker at the
+resulting `.assets.deploy/` directory.
 
 ## Development
 

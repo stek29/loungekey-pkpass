@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/liyue201/goqr"
+	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/qrcode"
 )
 
 const (
@@ -220,13 +221,13 @@ func decodeQRDataURL(source string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode LoungeKey QR JPEG: %w", err)
 	}
-	codes, err := goqr.Recognize(image)
-	if err != nil || len(codes) == 0 {
-		return "", errors.New("could not decode LoungeKey QR image")
+	bitmap, err := gozxing.NewBinaryBitmapFromImage(image)
+	if err != nil {
+		return "", fmt.Errorf("prepare LoungeKey QR image: %w", err)
 	}
-	runes := make([]rune, len(codes[0].Payload))
-	for i, b := range codes[0].Payload {
-		runes[i] = rune(b)
+	result, err := qrcode.NewQRCodeReader().Decode(bitmap, nil)
+	if err != nil {
+		return "", fmt.Errorf("decode LoungeKey QR image: %w", err)
 	}
-	return string(runes), nil
+	return result.GetText(), nil
 }

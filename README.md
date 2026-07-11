@@ -1,63 +1,107 @@
 # LoungeKey pkpass Generator
 
-Go-приложение для создания и автоматического обновления неподписанных LoungeKey `.pkpass` на Android. Apple Wallet отклоняет неподписанные passes.
+A Go application that generates unsigned, updateable `.pkpass` files from a
+LoungeKey account for compatible Android wallet applications. Apple Wallet
+rejects unsigned passes.
 
-## Сборка
+## Why this exists
+
+LoungeKey does not provide a convenient way to keep multiple accounts available
+and switch between them without signing out and signing back in. This project
+was created to explore using separate wallet passes as a more convenient way to
+keep multiple accounts accessible.
+
+## Disclaimer
+
+This independent project was created for educational and research purposes. It
+is not affiliated with, endorsed by, or sponsored by Lounge Key Limited,
+Collinson Group, or any of their affiliates. LoungeKey and associated marks
+belong to their respective owners. No third-party logos or other trademark
+assets are included.
+
+The BSD Zero Clause License covers this project's code only. It does not grant
+permission to access any third-party service, automate an account, reproduce
+branded assets, or use a wallet pass for lounge entry. Users are responsible
+for complying with the terms that apply to their accounts and services.
+
+## Build
 
 ```bash
 go build -o loungekey-pass ./cmd/loungekey-pass
 ```
 
-Внешние программы и сервисы для декодирования QR не нужны.
+QR decoding is implemented in the application; no external QR-decoding program
+or service is required.
 
-## Генерация
+## Generate a pass
 
-Файл учётных данных (по умолчанию `account1.env`):
+Create a credentials file named `account1.env`:
 
 ```dotenv
 LOUNGEKEY_LOGIN=your_username
 LOUNGEKEY_PASSWORD=your_password
 ```
 
-Создать обычный pass:
+Generate a regular pass:
 
 ```bash
-./loungekey-pass generate -o loungekey.pkpass
+./loungekey-pass generate -o lounge-access.pkpass
 ```
 
-Создать обновляемый pass:
+Generate an updateable pass:
 
 ```bash
 ./loungekey-pass generate \
   --web-service-url https://passes.example.com \
-  -o loungekey.pkpass
+  -o lounge-access.pkpass
 ```
 
-Можно указать другой файл через `--env-file`. Ручной режим доступен через `--manual` и поля `--name`, `--lounge-number`, `--card-last4`, `--expiration`, `--date-added`, `--qr-message`.
+Use `--env-file` to select another credentials file. Manual mode is available
+with `--manual` and requires `--name`, `--lounge-number`, `--card-last4`,
+`--expiration`, `--date-added`, and `--qr-message`.
 
-## Сервер обновлений
+## Update server
 
 ```bash
 ./loungekey-pass serve --host 0.0.0.0 --port 8080
 ```
 
-Wallet запрашивает `GET /v1/passes/pass.rocks.stek29.lounge-access/{username}`. Username хранится как `serialNumber`, пароль — в стандартном заголовке `Authorization: ApplePass …` в base64url. Сервер stateless и ничего не сохраняет.
-
-`webServiceURL` всегда определяется из origin входящего HTTP-запроса. За reverse proxy сервер использует `X-Forwarded-Proto` и `X-Forwarded-Host`; отдельная настройка публичного URL не требуется.
-
-Откройте корень сервера в браузере, чтобы создать первый pass без CLI:
+Open the server root to generate the first pass without using the CLI:
 
 ```text
 https://passes.example.com/
 ```
 
-Страница содержит обычную HTML-форму без JavaScript. После отправки сервер входит в LoungeKey и возвращает `.pkpass`; его `webServiceURL` автоматически совпадает с HTTP origin страницы. Логин и пароль не сохраняются.
+The page is a plain HTML form without JavaScript. The server signs in to
+LoungeKey and returns a `.pkpass` whose `webServiceURL` matches the request
+origin. It does not retain credentials in a database or on disk.
 
-Проверка состояния: `GET /healthz`.
+For passes generated or refreshed by the server, `webServiceURL` is derived
+from the incoming request. Behind a reverse proxy, the server uses
+`X-Forwarded-Proto` and `X-Forwarded-Host`. Configure the proxy to overwrite
+these headers rather than accepting client-supplied values. CLI generation uses
+the explicit value supplied through `--web-service-url`.
 
-## Метаданные pass
+The wallet refresh endpoint is:
 
-По умолчанию используются независимые идентификаторы и нейтральный branding:
+```text
+GET /v1/passes/pass.rocks.stek29.lounge-access/{username}
+```
+
+The username is stored as the pass `serialNumber`. The password is encoded with
+base64url and stored as the pass `authenticationToken`, then sent in the
+standard `Authorization: ApplePass ...` header.
+
+> [!WARNING]
+> Base64url is encoding, not encryption. Anyone who obtains an updateable pass
+> can recover its LoungeKey password. Do not share generated passes, and expose
+> the update server only over HTTPS.
+
+Health check: `GET /healthz`.
+
+## Pass metadata
+
+The default metadata is neutral and independent:
 
 ```text
 passTypeIdentifier = pass.rocks.stek29.lounge-access
@@ -66,13 +110,24 @@ description        = Lounge Access Pass
 teamIdentifier     = XXXXXXXXXX
 ```
 
-Перед Apple signing задайте настоящий Team ID и Pass Type ID через `PASS_TEAM_IDENTIFIER` и `PASS_TYPE_IDENTIFIER`. Также доступны `PASS_ORGANIZATION_NAME` и `PASS_DESCRIPTION`. Для CLI каждому значению соответствует флаг `--team-identifier`, `--pass-type-identifier`, `--organization-name` или `--pass-description`.
+Before signing a pass for Apple Wallet, provide a real Team ID and Pass Type ID
+through `PASS_TEAM_IDENTIFIER` and `PASS_TYPE_IDENTIFIER`. The server also
+supports `PASS_ORGANIZATION_NAME` and `PASS_DESCRIPTION`. For CLI generation,
+the corresponding flags are `--team-identifier`, `--pass-type-identifier`,
+`--organization-name`, and `--pass-description`.
 
-### Опциональный официальный логотип
+## Custom assets
 
-По умолчанию приложение не загружает и не включает сторонние логотипы. Кастомные pass assets можно подготовить отдельно и передать через `--assets` или `PASS_ASSETS_DIR`. Сервер не скачивает их и не управляет кешем.
+By default, the application generates neutral assets and does not download or
+include third-party logos. Supply a directory of custom pass assets with
+`--assets`. The server also reads the directory from `PASS_ASSETS_DIR`.
 
-Пример подготовки assets с логотипом, который сейчас используется официальным сайтом LoungeKey (нужны `curl` и ImageMagick):
+Only use assets you have permission to use. The server does not download or
+cache them.
+
+For example, the following commands prepare a custom asset directory using the
+logo currently served by LoungeKey's website. This is optional and requires
+`curl` and ImageMagick:
 
 ```bash
 mkdir -p assets
@@ -84,18 +139,24 @@ magick -size 58x58 xc:none assets/icon.png
 magick -size 116x116 xc:none assets/icon@2x.png
 magick -size 375x3 'xc:#009245' assets/strip.png
 magick -size 750x6 'xc:#009245' assets/strip@2x.png
-magick /tmp/loungekey-logo.webp -resize '160x58>' -gravity center -background none -extent 160x58 assets/logo.png
-magick /tmp/loungekey-logo.webp -resize '320x116>' -gravity center -background none -extent 320x116 assets/logo@2x.png
+magick /tmp/loungekey-logo.webp -resize '160x58>' -gravity center \
+  -background none -extent 160x58 assets/logo.png
+magick /tmp/loungekey-logo.webp -resize '320x116>' -gravity center \
+  -background none -extent 320x116 assets/logo@2x.png
 rm /tmp/loungekey-logo.webp
 ```
 
-Использование с локальным сервером:
+The external URL and image are controlled by their owner and may change or
+disappear. The project's license does not cover the downloaded image; confirm
+that your intended use is permitted.
+
+Use the directory with a local server:
 
 ```bash
 ./loungekey-pass serve --assets ./assets --host 0.0.0.0 --port 8080
 ```
 
-Или с Docker:
+Example with Docker:
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -104,21 +165,39 @@ docker run --rm -p 8080:8080 \
   loungekey-pkpass
 ```
 
-Внешний URL и изображение контролируются их владельцем и могут измениться. LoungeKey является товарным знаком соответствующего правообладателя. Проект независим и не связан с LoungeKey, не одобрен и не спонсируется им.
-
 ## Docker
-
-Собрать и запустить контейнер:
 
 ```bash
 docker build -t loungekey-pkpass .
 docker run --rm -p 8080:8080 loungekey-pkpass
 ```
 
-После запуска форма доступна на `http://localhost:8080/`. Для работы за reverse proxy передавайте `X-Forwarded-Proto` и `X-Forwarded-Host`, чтобы pass получил внешний HTTPS origin.
+The form is then available at `http://localhost:8080/`. When deploying behind a
+reverse proxy, forward sanitized `X-Forwarded-Proto` and `X-Forwarded-Host`
+headers so generated passes contain the external HTTPS origin.
 
-GitHub Actions проверяет Go-код и сборку контейнера для каждого push/PR. Push в `main`/`master` и теги `v*` публикуют multi-arch образ в `ghcr.io/stek29/loungekey-pkpass` с тегами `latest`, semver и `sha-*`.
+GitHub Actions tests the Go code and container build for pull requests and for
+pushes to `main` or `master`. Pushes to `main`/`master` and tags matching `v*`
+publish a multi-architecture image to `ghcr.io/stek29/loungekey-pkpass` with
+`latest`, semantic-version, and `sha-*` tags as applicable.
 
-## Лицензия
+## License
 
-См. [LICENSE](LICENSE).
+The project is licensed under the [BSD Zero Clause License](LICENSE).
+
+## Third-party notices
+
+The application uses the following third-party Go modules:
+
+- [goquery](https://github.com/PuerkitoBio/goquery), copyright Martin Angers
+  and contributors, licensed under the BSD 3-Clause License.
+- [Cascadia](https://github.com/andybalholm/cascadia), copyright Andy Balholm,
+  licensed under the BSD 3-Clause License.
+- [Go supplementary network libraries](https://github.com/golang/net),
+  copyright The Go Authors, licensed under the BSD 3-Clause License.
+- [gozxing](https://github.com/makiuchi-d/gozxing), copyright Daisuke Makiuchi
+  and contributors, licensed under the MIT License.
+
+The module versions used by a particular build are recorded in `go.mod` and
+`go.sum`. These dependencies are not relicensed under the project's BSD Zero
+Clause License; their respective license terms continue to apply.

@@ -118,6 +118,9 @@ official website and creates an untracked `.assets.local` directory. It requires
 not distributed by this project, and is not covered by this project's license.
 Confirm that your intended use is permitted.
 
+The explicit input density makes ImageMagick rasterize the SVG above the
+largest output size before downsampling, avoiding a blurry enlarged logo.
+
 ```bash
 rm -rf .assets.local
 mkdir .assets.local
@@ -127,9 +130,9 @@ curl --fail --location \
   'https://images.ctfassets.net/ibqmfcvkfft1/7yesdYfEm4oL7HlMgQ6lMY/626632627bcf816e2cba2d013de60e4d/LoungeKey_103x32.svg' \
   --output /tmp/loungekey-logo.svg
 
-magick -background none /tmp/loungekey-logo.svg -alpha on \
+magick -density 384 -background none /tmp/loungekey-logo.svg -alpha on \
   -resize '160x58' -gravity center -extent 160x58 .assets.local/logo.png
-magick -background none /tmp/loungekey-logo.svg -alpha on \
+magick -density 384 -background none /tmp/loungekey-logo.svg -alpha on \
   -resize '320x116' -gravity center -extent 320x116 .assets.local/logo@2x.png
 rm /tmp/loungekey-logo.svg
 ```

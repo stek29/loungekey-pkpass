@@ -166,7 +166,7 @@ func copyAssets(source, destination string) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || e.Name() == "strip.png" || e.Name() == "strip@2x.png" {
 			continue
 		}
 		in, err := os.Open(filepath.Join(source, e.Name()))
@@ -192,11 +192,10 @@ func copyAssets(source, destination string) error {
 }
 func createAssets(dir string) error {
 	transparent := color.NRGBA{0, 0, 0, 0}
-	green := color.NRGBA{0, 146, 69, 255}
 	for name, spec := range map[string]struct {
 		w, h int
 		c    color.Color
-	}{"icon.png": {58, 58, transparent}, "icon@2x.png": {116, 116, transparent}, "strip.png": {375, 3, green}, "strip@2x.png": {750, 6, green}} {
+	}{"icon.png": {58, 58, transparent}, "icon@2x.png": {116, 116, transparent}} {
 		if err := writePNG(filepath.Join(dir, name), spec.w, spec.h, spec.c); err != nil {
 			return err
 		}

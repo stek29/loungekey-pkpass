@@ -1,6 +1,8 @@
 package passkit
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stek29/loungekey-pkpass/internal/loungekey"
@@ -14,6 +16,27 @@ func TestPasswordTokenRoundTrip(t *testing.T) {
 	}
 	if got != password {
 		t.Fatalf("got %q, want %q", got, password)
+	}
+}
+
+func TestCopyAssetsOmitsStripImages(t *testing.T) {
+	source := t.TempDir()
+	destination := t.TempDir()
+	for _, name := range []string{"logo.png", "strip.png", "strip@2x.png"} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyAssets(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "logo.png")); err != nil {
+		t.Fatalf("logo asset was not copied: %v", err)
+	}
+	for _, name := range []string{"strip.png", "strip@2x.png"} {
+		if _, err := os.Stat(filepath.Join(destination, name)); !os.IsNotExist(err) {
+			t.Errorf("%s was copied", name)
+		}
 	}
 }
 

@@ -68,6 +68,7 @@ async function generate(
   const password = form.get("password") ?? "";
   if (!username || !password)
     throw new HttpError(400, "username and password are required");
+  await enforceLoginLimit(request, config, username);
   const account = await fetchAccount(
     config.fetch,
     username,
@@ -108,6 +109,7 @@ async function refresh(
   } catch {
     throw new HttpError(401, "invalid authorization");
   }
+  await enforceLoginLimit(request, config, username);
   const account = await fetchAccount(
     config.fetch,
     username,
@@ -126,6 +128,15 @@ async function refresh(
     config.assets,
   );
   return passResponse(pass, username);
+}
+
+async function enforceLoginLimit(
+  request: Request,
+  config: RuntimeConfig,
+  username: string,
+): Promise<void> {
+  if (!(await config.consumeLoginLimit(request, username)))
+    throw new HttpError(429, "too many login attempts");
 }
 
 function decodePath(value: string): string {

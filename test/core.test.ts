@@ -49,6 +49,7 @@ function config(fetcher: typeof fetch = fetch): RuntimeConfig {
     assets: new MemoryAssets(),
     fetch: fetcher,
     clientIp: () => undefined,
+    consumeLoginLimit: async () => true,
     runtime: "node",
     trustProxy: false,
   };
@@ -375,6 +376,37 @@ it("returns health, form, errors, and no-store headers", async () => {
       "no-store",
     );
   }
+});
+
+it("applies the shared login limiter to generation and refresh", async () => {
+  const usernames: string[] = [];
+  const runtime = config(async () => {
+    throw new Error("LoungeKey must not be called");
+  });
+  runtime.consumeLoginLimit = async (_request, username) => {
+    usernames.push(username);
+    return false;
+  };
+
+  const generated = await handleRequest(
+    new Request("https://passes.example/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "username=member&password=secret",
+    }),
+    runtime,
+  );
+  const refreshed = await handleRequest(
+    new Request(
+      `https://passes.example/v1/passes/${defaultMetadata.passTypeIdentifier}/member`,
+      { headers: { Authorization: `ApplePass ${passwordToken("secret")}` } },
+    ),
+    runtime,
+  );
+
+  expect(generated.status).toBe(429);
+  expect(refreshed.status).toBe(429);
+  expect(usernames).toEqual(["member", "member"]);
 });
 
 it("serves the same logo asset referenced by the form", async () => {

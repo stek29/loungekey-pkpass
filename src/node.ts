@@ -46,6 +46,7 @@ const config = {
   fetch,
   clientIp: (request: Request) =>
     request.headers.get("x-loungekey-pkpass-observed-client-ip") || undefined,
+  consumeLoginLimit: async () => true,
   runtime: "node" as const,
   trustProxy: process.env.TRUST_PROXY === "true",
 };

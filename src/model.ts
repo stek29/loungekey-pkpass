@@ -53,6 +53,7 @@ export interface RuntimeConfig {
   assets: AssetProvider;
   fetch: typeof globalThis.fetch;
   clientIp(request: Request): string | undefined;
+  consumeLoginLimit(request: Request, username: string): Promise<boolean>;
   runtime: "worker" | "node";
   trustProxy: boolean;
 }

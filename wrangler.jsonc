@@ -13,5 +13,15 @@
     "directory": "./assets/default",
     "binding": "PASS_ASSETS",
     "run_worker_first": true
-  }
+  },
+  "ratelimits": [
+    {
+      "name": "LOGIN_RATE_LIMITER",
+      "namespace_id": "291104731",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ]
 }

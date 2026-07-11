@@ -80,6 +80,7 @@ export async function fetchAccount(
   fetcher: typeof fetch,
   username: string,
   password: string,
+  clientIp?: string,
 ): Promise<Account> {
   if (!username || !password)
     throw new Error("username and password are required");
@@ -95,6 +96,7 @@ export async function fetchAccount(
       "Content-Type": "application/json",
       Referer: loginUrl,
       "X-Requested-With": "XMLHttpRequest",
+      ...(clientIp ? { "X-LoungeKey-Pkpass-Client-IP": clientIp } : {}),
     },
     body: JSON.stringify({
       TimezoneOffset: String(new Date().getTimezoneOffset()),

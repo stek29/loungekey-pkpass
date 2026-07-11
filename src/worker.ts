@@ -52,6 +52,8 @@ export default {
       }),
       assets: new WorkerAssets(env.PASS_ASSETS),
       fetch,
+      clientIp: (incoming: Request) =>
+        incoming.headers.get("cf-connecting-ip") || undefined,
       runtime: "worker",
       trustProxy: false,
     });

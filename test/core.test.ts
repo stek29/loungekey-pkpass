@@ -48,6 +48,7 @@ function config(fetcher: typeof fetch = fetch): RuntimeConfig {
     appearance: defaultAppearance,
     assets: new MemoryAssets(),
     fetch: fetcher,
+    clientIp: () => undefined,
     runtime: "node",
     trustProxy: false,
   };
@@ -203,6 +204,28 @@ it("enriches known packages and skips enrichment for unknown packages", async ()
     (await fetchAccount(unknownFetcher, "member", "secret")).entitlement,
   ).toEqual({ type: "unknown" });
   expect(requested).toHaveLength(3);
+});
+
+it("attributes the login attempt to the observed client IP", async () => {
+  let attributedIp: string | null = null;
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url === "https://www.loungekey.com/en/login")
+      return new Response("login");
+    if (url.includes("/api/loungekey/")) {
+      attributedIp = new Headers(init?.headers).get(
+        "x-loungekey-pkpass-client-ip",
+      );
+      return Response.json({
+        Success: true,
+        RedirectUrl: "/en/future-package/dashboard/my-account",
+      });
+    }
+    return new Response(await dashboardFixture());
+  };
+
+  await fetchAccount(fetcher, "member", "secret", "203.0.113.42");
+  expect(attributedIp).toBe("203.0.113.42");
 });
 
 it("falls back when optional benefits are unavailable", async () => {

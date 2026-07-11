@@ -68,7 +68,12 @@ async function generate(
   const password = form.get("password") ?? "";
   if (!username || !password)
     throw new HttpError(400, "username and password are required");
-  const account = await fetchAccount(config.fetch, username, password);
+  const account = await fetchAccount(
+    config.fetch,
+    username,
+    password,
+    config.clientIp(request),
+  );
   const pass = await buildPass(
     account,
     {
@@ -103,7 +108,12 @@ async function refresh(
   } catch {
     throw new HttpError(401, "invalid authorization");
   }
-  const account = await fetchAccount(config.fetch, username, password);
+  const account = await fetchAccount(
+    config.fetch,
+    username,
+    password,
+    config.clientIp(request),
+  );
   const pass = await buildPass(
     account,
     {

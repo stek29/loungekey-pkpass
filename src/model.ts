@@ -52,6 +52,7 @@ export interface RuntimeConfig {
   appearance: PassAppearance;
   assets: AssetProvider;
   fetch: typeof globalThis.fetch;
+  clientIp(request: Request): string | undefined;
   runtime: "worker" | "node";
   trustProxy: boolean;
 }

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
+import { isIP } from "node:net";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { handleRequest, noStoreHeaders } from "./app.js";
@@ -43,13 +44,15 @@ const config = {
   }),
   assets: new DirectoryAssets(assetsDirectory),
   fetch,
+  clientIp: (request: Request) =>
+    request.headers.get("x-loungekey-pkpass-observed-client-ip") || undefined,
   runtime: "node" as const,
   trustProxy: process.env.TRUST_PROXY === "true",
 };
 
 const server = createServer(async (incoming, outgoing) => {
   try {
-    const request = await webRequest(incoming);
+    const request = await webRequest(incoming, config.trustProxy);
     const response = await handleRequest(request, config);
     outgoing.writeHead(response.status, Object.fromEntries(response.headers));
     if (response.body)
@@ -86,7 +89,10 @@ function parsePort(value: string): number {
   return parsed;
 }
 
-async function webRequest(incoming: IncomingMessage): Promise<Request> {
+async function webRequest(
+  incoming: IncomingMessage,
+  trustProxy: boolean,
+): Promise<Request> {
   const authority = incoming.headers.host || "localhost";
   const headers = new Headers();
   for (const [name, value] of Object.entries(incoming.headers)) {
@@ -94,6 +100,17 @@ async function webRequest(incoming: IncomingMessage): Promise<Request> {
       for (const item of value) headers.append(name, item);
     else if (value !== undefined) headers.set(name, value);
   }
+  headers.delete("x-loungekey-pkpass-observed-client-ip");
+  const forwardedHeader = incoming.headers["x-forwarded-for"];
+  const forwardedValue = Array.isArray(forwardedHeader)
+    ? forwardedHeader[0]
+    : forwardedHeader;
+  const forwarded = trustProxy
+    ? forwardedValue?.split(",", 1)[0]?.trim()
+    : undefined;
+  const observedIp = forwarded || incoming.socket.remoteAddress;
+  if (observedIp && isIP(observedIp))
+    headers.set("x-loungekey-pkpass-observed-client-ip", observedIp);
   const method = incoming.method || "GET";
   const body =
     method === "GET" || method === "HEAD"

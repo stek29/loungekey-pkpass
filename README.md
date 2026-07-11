@@ -38,11 +38,12 @@ LOUNGEKEY_PASSWORD=your_password
 ## Сервер обновлений
 
 ```bash
-PASS_SERVER_URL=https://passes.example.com \
-  ./loungekey-pass serve --host 0.0.0.0 --port 8080
+./loungekey-pass serve --host 0.0.0.0 --port 8080
 ```
 
 Wallet запрашивает `GET /v1/passes/pass.com.loungekey.membership/{username}`. Username хранится как `serialNumber`, пароль — в стандартном заголовке `Authorization: ApplePass …` в base64url. Сервер stateless и ничего не сохраняет.
+
+`webServiceURL` всегда определяется из origin входящего HTTP-запроса. За reverse proxy сервер использует `X-Forwarded-Proto` и `X-Forwarded-Host`; отдельная настройка публичного URL не требуется.
 
 Откройте корень сервера в браузере, чтобы создать первый pass без CLI:
 

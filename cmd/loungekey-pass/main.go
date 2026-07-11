@@ -112,13 +112,13 @@ func serve(arguments []string) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	handler := &refreshHandler{publicURL: strings.TrimRight(os.Getenv("PASS_SERVER_URL"), "/")}
+	handler := &refreshHandler{}
 	server := &http.Server{Addr: fmt.Sprintf("%s:%d", *host, *port), Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("Listening on http://%s", server.Addr)
 	return server.ListenAndServe()
 }
 
-type refreshHandler struct{ publicURL string }
+type refreshHandler struct{}
 
 func (h *refreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
@@ -181,11 +181,7 @@ func (h *refreshHandler) refreshPass(w http.ResponseWriter, r *http.Request) {
 	path := temp.Name()
 	temp.Close()
 	defer os.Remove(path)
-	baseURL := h.publicURL
-	if baseURL == "" {
-		baseURL = requestOrigin(r)
-	}
-	if err := passkit.Build(account, passkit.Options{SerialNumber: username, WebServiceURL: baseURL, AuthenticationToken: passkit.PasswordToken(password)}, path, ""); err != nil {
+	if err := passkit.Build(account, passkit.Options{SerialNumber: username, WebServiceURL: requestOrigin(r), AuthenticationToken: passkit.PasswordToken(password)}, path, ""); err != nil {
 		log.Printf("build pass: %v", err)
 		writeJSONResponse(w, 500, `{"error":"could not build pass"}`)
 		return

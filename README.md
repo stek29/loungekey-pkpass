@@ -1,201 +1,180 @@
 # LoungeKey pkpass Generator
 
-A Go application that generates unsigned, updateable `.pkpass` files from a
-LoungeKey account for compatible Android wallet applications. Apple Wallet
+A TypeScript service that generates unsigned, updateable `.pkpass` files from a
+LoungeKey account for compatible Android wallet applications. It runs on
+Cloudflare Workers or as a standalone Node.js Docker container. Apple Wallet
 rejects unsigned passes.
-
-## Why this exists
-
-LoungeKey does not provide a convenient way to keep multiple accounts available
-and switch between them without signing out and signing back in. This project
-was created to explore using separate wallet passes as a more convenient way to
-keep multiple accounts accessible.
 
 ## Disclaimer
 
 This independent project was created for educational and research purposes. It
 is not affiliated with, endorsed by, or sponsored by Lounge Key Limited,
 Collinson Group, or any of their affiliates. LoungeKey and associated marks
-belong to their respective owners. No third-party logos or other trademark
-assets are included.
+belong to their respective owners. No third-party logos or trademark assets are
+distributed with this project.
 
 The BSD Zero Clause License covers this project's code only. It does not grant
-permission to access any third-party service, automate an account, reproduce
-branded assets, or use a wallet pass for lounge entry. Users are responsible
-for complying with the terms that apply to their accounts and services.
+permission to access a third-party service, automate an account, reproduce
+branded assets, or use a wallet pass for lounge entry. Users are responsible for
+complying with the terms that apply to their accounts and services.
 
-## Build
+## How it works
 
-```bash
-go build -o loungekey-pass ./cmd/loungekey-pass
-```
-
-QR decoding is implemented in the application; no external QR-decoding program
-or service is required.
-
-## Generate a pass
-
-Create a credentials file named `account1.env`:
-
-```dotenv
-LOUNGEKEY_LOGIN=your_username
-LOUNGEKEY_PASSWORD=your_password
-```
-
-Generate a regular pass:
-
-```bash
-./loungekey-pass generate -o lounge-access.pkpass
-```
-
-Generate an updateable pass:
-
-```bash
-./loungekey-pass generate \
-  --web-service-url https://passes.example.com \
-  -o lounge-access.pkpass
-```
-
-Use `--env-file` to select another credentials file. Manual mode is available
-with `--manual` and requires `--name`, `--lounge-number`, `--card-last4`,
-`--expiration`, `--date-added`, and `--qr-message`.
-
-## Update server
-
-```bash
-./loungekey-pass serve --host 0.0.0.0 --port 8080
-```
-
-Open the server root to generate the first pass without using the CLI:
-
-```text
-https://passes.example.com/
-```
-
-The page is a plain HTML form without JavaScript. The server signs in to
-LoungeKey and returns a `.pkpass` whose `webServiceURL` matches the request
-origin. It does not retain credentials in a database or on disk.
-
-For passes generated or refreshed by the server, `webServiceURL` is derived
-from the incoming request. Behind a reverse proxy, the server uses
-`X-Forwarded-Proto` and `X-Forwarded-Host`. Configure the proxy to overwrite
-these headers rather than accepting client-supplied values. CLI generation uses
-the explicit value supplied through `--web-service-url`.
+Open the service root and submit the HTML-only username/password form. The
+service signs in to LoungeKey and returns a `.pkpass` containing the current QR
+code and its own refresh URL. The form displays the same `logo.png` asset that
+will be embedded in the generated pass.
 
 The wallet refresh endpoint is:
 
 ```text
-GET /v1/passes/pass.rocks.stek29.lounge-access/{username}
+GET /v1/passes/{passTypeIdentifier}/{username}
+Authorization: ApplePass {base64url-password}
 ```
 
-The username is stored as the pass `serialNumber`. The password is encoded with
-base64url and stored as the pass `authenticationToken`, then sent in the
-standard `Authorization: ApplePass ...` header.
+The username is the pass `serialNumber`. The base64url-encoded password is the
+pass `authenticationToken`. The service is stateless and does not store either
+credential, but anyone who obtains the pass can recover its password. Use HTTPS
+and never share generated passes.
 
-> [!WARNING]
-> Base64url is encoding, not encryption. Anyone who obtains an updateable pass
-> can recover its LoungeKey password. Do not share generated passes, and expose
-> the update server only over HTTPS.
+Generated pass responses are marked `private` and `no-store` for clients,
+proxies, and Cloudflare so every refresh reaches LoungeKey. Health check:
+`GET /healthz`.
 
-Health check: `GET /healthz`.
+## Cloudflare Workers
 
-## Pass metadata
+Requirements: Node.js 24 LTS, npm, and an authenticated Wrangler installation.
 
-The default metadata is neutral and independent:
+```bash
+npm ci
+npm run check
+npm test
+npm run test:worker
+npm run deploy -- --name <worker-name>
+```
+
+The tracked Wrangler configuration contains no account ID, Worker name, route,
+domain, or credential. Wrangler deploys to the account selected by the invoking
+user. The Worker name is always supplied on the command line.
+
+Pass metadata can be configured as Worker variables:
 
 ```text
-passTypeIdentifier = pass.rocks.stek29.lounge-access
-organizationName   = stek29
-description        = Lounge Access Pass
-teamIdentifier     = XXXXXXXXXX
+PASS_TYPE_IDENTIFIER
+PASS_TEAM_IDENTIFIER
+PASS_ORGANIZATION_NAME
+PASS_DESCRIPTION
+PASS_FOREGROUND_COLOR
+PASS_BACKGROUND_COLOR
+PASS_LABEL_COLOR
 ```
 
-Before signing a pass for Apple Wallet, provide a real Team ID and Pass Type ID
-through `PASS_TEAM_IDENTIFIER` and `PASS_TYPE_IDENTIFIER`. The server also
-supports `PASS_ORGANIZATION_NAME` and `PASS_DESCRIPTION`. For CLI generation,
-the corresponding flags are `--team-identifier`, `--pass-type-identifier`,
-`--organization-name`, and `--pass-description`.
+Colors use Wallet's `rgb(red, green, blue)` notation with channels from 0 to
+255.
 
-## Custom assets
-
-By default, the application generates neutral assets and does not download or
-include third-party logos. Supply a directory of custom pass assets with
-`--assets`. The server also reads the directory from `PASS_ASSETS_DIR`.
-
-Only use assets you have permission to use. The server does not download or
-cache them.
-
-For example, the following commands prepare a custom asset directory using the
-LoungeKey SVG referenced by [Collinson's official website](https://www.collinsongroup.com/en-GB/our-companies/collinson-international-test).
-This optional example requires `curl` and ImageMagick:
-
-```bash
-mkdir -p assets
-curl --fail --location \
-  'https://images.ctfassets.net/ibqmfcvkfft1/7yesdYfEm4oL7HlMgQ6lMY/626632627bcf816e2cba2d013de60e4d/LoungeKey_103x32.svg' \
-  --output /tmp/loungekey-logo.svg
-
-magick -size 58x58 xc:none assets/icon.png
-magick -size 116x116 xc:none assets/icon@2x.png
-magick -background none /tmp/loungekey-logo.svg -alpha on \
-  -resize '160x58' -gravity center -extent 160x58 assets/logo.png
-magick -background none /tmp/loungekey-logo.svg -alpha on \
-  -resize '320x116' -gravity center -extent 320x116 assets/logo@2x.png
-rm /tmp/loungekey-logo.svg
-```
-
-The external URL and image are controlled by their owner and may change or
-disappear. The project's license does not cover the downloaded image; confirm
-that your intended use is permitted.
-
-Use the directory with a local server:
-
-```bash
-./loungekey-pass serve --assets ./assets --host 0.0.0.0 --port 8080
-```
-
-Example with Docker:
-
-```bash
-docker run --rm -p 8080:8080 \
-  -v "$PWD/assets:/assets:ro" \
-  -e PASS_ASSETS_DIR=/assets \
-  loungekey-pkpass
-```
+No database, KV namespace, R2 bucket, Durable Object, or secret is required.
 
 ## Docker
+
+Build and run the Node.js 24 LTS image:
 
 ```bash
 docker build -t loungekey-pkpass .
 docker run --rm -p 8080:8080 loungekey-pkpass
 ```
 
-The form is then available at `http://localhost:8080/`. When deploying behind a
-reverse proxy, forward sanitized `X-Forwarded-Proto` and `X-Forwarded-Host`
-headers so generated passes contain the external HTTPS origin.
+Configuration:
 
-GitHub Actions tests the Go code and container build for pull requests and for
-pushes to `main` or `master`. Pushes to `main`/`master` and tags matching `v*`
-publish a multi-architecture image to `ghcr.io/stek29/loungekey-pkpass` with
-`latest`, semantic-version, and `sha-*` tags as applicable.
+```text
+HOST                       default: 0.0.0.0
+PORT                       default: 8080
+TRUST_PROXY                default: false
+PASS_ASSETS_DIR            default: /app/assets/default
+PASS_TYPE_IDENTIFIER       default: pass.rocks.stek29.lounge-access
+PASS_TEAM_IDENTIFIER       default: XXXXXXXXXX
+PASS_ORGANIZATION_NAME     default: stek29
+PASS_DESCRIPTION           default: Lounge Access Pass
+PASS_FOREGROUND_COLOR      default: rgb(52, 73, 94)
+PASS_BACKGROUND_COLOR      default: rgb(255, 255, 255)
+PASS_LABEL_COLOR           default: rgb(52, 73, 94)
+```
+
+The public `webServiceURL` comes from the incoming request. When Docker runs
+behind a trusted reverse proxy, set `TRUST_PROXY=true` and configure the proxy
+to overwrite `X-Forwarded-Host` and `X-Forwarded-Proto`. Never pass through
+client-supplied forwarded headers.
+
+## Pass assets
+
+The repository contains neutral project-owned assets in `assets/default`.
+Passes contain `icon.png`, `icon@2x.png`, `logo.png`, and `logo@2x.png`; strip
+images are neither accepted nor generated.
+
+### Optional LoungeKey logo
+
+The following optional example downloads the logo referenced by Collinson's
+official website and creates an untracked `.assets.local` directory. It requires
+`curl` and ImageMagick. The downloaded artwork is controlled by its owner, is
+not distributed by this project, and is not covered by this project's license.
+Confirm that your intended use is permitted.
+
+```bash
+rm -rf .assets.local
+mkdir .assets.local
+cp assets/default/icon.png assets/default/icon@2x.png .assets.local/
+
+curl --fail --location \
+  'https://images.ctfassets.net/ibqmfcvkfft1/7yesdYfEm4oL7HlMgQ6lMY/626632627bcf816e2cba2d013de60e4d/LoungeKey_103x32.svg' \
+  --output /tmp/loungekey-logo.svg
+
+magick -background none /tmp/loungekey-logo.svg -alpha on \
+  -resize '160x58' -gravity center -extent 160x58 .assets.local/logo.png
+magick -background none /tmp/loungekey-logo.svg -alpha on \
+  -resize '320x116' -gravity center -extent 320x116 .assets.local/logo@2x.png
+rm /tmp/loungekey-logo.svg
+```
+
+Deploy the Worker with those untracked assets:
+
+```bash
+npm run deploy -- --name <worker-name> --assets ./.assets.local
+```
+
+Mount the same directory into Docker:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v "$PWD/.assets.local:/pass-assets:ro" \
+  -e PASS_ASSETS_DIR=/pass-assets \
+  loungekey-pkpass
+```
+
+## Development
+
+```bash
+npm ci
+npm run check
+npm test
+npm run test:worker
+npm run deploy -- --name dry-run --dry-run
+```
+
+The test suite uses harmless local HTML and JPEG QR fixtures. Live credentials
+and generated passes are ignored by Git. Pushes and pull requests run type,
+format, lint, Node/workerd, dependency-audit, Worker-bundle, and Docker checks.
+Default-branch and version-tag pushes continue publishing multi-architecture
+Docker images to GHCR.
 
 ## License
 
 The project is licensed under the [BSD Zero Clause License](LICENSE).
 
-## Third-party notices
+Runtime dependencies and bundled components retain their own licenses:
 
-The application uses the following third-party Go modules:
+- [zxing-wasm](https://github.com/Sec-ant/zxing-wasm): MIT; its bundled
+  ZXing-C++ code is Apache-2.0 and Zint components are BSD 3-Clause.
+- [fflate](https://github.com/101arrowz/fflate): MIT.
+- [htmlparser2](https://github.com/fb55/htmlparser2): MIT.
 
-- [goquery](https://github.com/PuerkitoBio/goquery), copyright Martin Angers
-  and contributors, licensed under the BSD 3-Clause License.
-- [Cascadia](https://github.com/andybalholm/cascadia), copyright Andy Balholm,
-  licensed under the BSD 3-Clause License.
-- [Go supplementary network libraries](https://github.com/golang/net),
-  copyright The Go Authors, licensed under the BSD 3-Clause License.
-- [gozxing](https://github.com/makiuchi-d/gozxing), copyright Daisuke Makiuchi
-  and contributors, licensed under the MIT License.
-
-The module versions used by a particular build are recorded in `go.mod` and
-`go.sum`. These dependencies are not relicensed under the project's BSD Zero
-Clause License; their respective license terms continue to apply.
+Exact direct and transitive versions are recorded in `package-lock.json` and
+are not relicensed under the project's BSD Zero Clause License.

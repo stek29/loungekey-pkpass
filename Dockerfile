@@ -1,30 +1,26 @@
-FROM golang:1.26-alpine AS build
-
-WORKDIR /src
-RUN apk add --no-cache ca-certificates
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-RUN CGO_ENABLED=0 go build \
-    -trimpath \
-    -ldflags="-s -w" \
-    -o /out/loungekey-pass \
-    ./cmd/loungekey-pass
-
-RUN mkdir -p /out/rootfs/etc/ssl/certs /out/rootfs/tmp \
-    && chmod 1777 /out/rootfs/tmp \
-    && cp /etc/ssl/certs/ca-certificates.crt /out/rootfs/etc/ssl/certs/ca-certificates.crt
-
-FROM scratch
+FROM node:24-alpine AS build
 
 WORKDIR /app
-COPY --from=build /out/loungekey-pass /usr/local/bin/loungekey-pass
-COPY --from=build --chown=65532:65532 /out/rootfs/ /
+COPY package.json package-lock.json ./
+RUN npm ci
 
-USER 65532:65532
+COPY tsconfig.json tsconfig.node.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM node:24-alpine
+
+ENV HOST=0.0.0.0 \
+    PORT=8080 \
+    NODE_ENV=production \
+    PASS_ASSETS_DIR=/app/assets/default
+WORKDIR /app
+
+COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --chown=node:node assets ./assets
+
+USER node
 EXPOSE 8080
-
-ENTRYPOINT ["loungekey-pass"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["node", "dist/node.js"]

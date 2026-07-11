@@ -17,17 +17,29 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          go-version-file: go.mod
-          cache: true
+          node-version: 24
+          cache: npm
 
-      - name: Test
-        run: go test -race ./...
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Vet
-        run: go vet ./...
+      - name: Check
+        run: npm run check
+
+      - name: Test Node runtime
+        run: npm test
+
+      - name: Test Workers runtime
+        run: npm run test:worker
+
+      - name: Audit dependencies
+        run: npm audit
+
+      - name: Check Worker bundle
+        run: npm run deploy -- --name dry-run --dry-run --outdir .wrangler-dist
 
   docker:
     runs-on: ubuntu-latest

@@ -126,24 +126,22 @@ Only use assets you have permission to use. The server does not download or
 cache them.
 
 For example, the following commands prepare a custom asset directory using the
-logo currently served by LoungeKey's website. This is optional and requires
-`curl` and ImageMagick:
+LoungeKey SVG referenced by [Collinson's official website](https://www.collinsongroup.com/en-GB/our-companies/collinson-international-test).
+This optional example requires `curl` and ImageMagick:
 
 ```bash
 mkdir -p assets
 curl --fail --location \
-  'https://d25xpw488bmti5.cloudfront.net/Default/Shared/DevDemo/Global/Logos/LK-logo-small-31f0203d-5bd1-4186-97cd-d4bcc6050043.webp?h=73&la=en&w=200' \
-  --output /tmp/loungekey-logo.webp
+  'https://images.ctfassets.net/ibqmfcvkfft1/7yesdYfEm4oL7HlMgQ6lMY/626632627bcf816e2cba2d013de60e4d/LoungeKey_103x32.svg' \
+  --output /tmp/loungekey-logo.svg
 
 magick -size 58x58 xc:none assets/icon.png
 magick -size 116x116 xc:none assets/icon@2x.png
-magick -size 375x3 'xc:#009245' assets/strip.png
-magick -size 750x6 'xc:#009245' assets/strip@2x.png
-magick /tmp/loungekey-logo.webp -resize '160x58>' -gravity center \
-  -background none -extent 160x58 assets/logo.png
-magick /tmp/loungekey-logo.webp -resize '320x116>' -gravity center \
-  -background none -extent 320x116 assets/logo@2x.png
-rm /tmp/loungekey-logo.webp
+magick -background none /tmp/loungekey-logo.svg -alpha on \
+  -resize '160x58' -gravity center -extent 160x58 assets/logo.png
+magick -background none /tmp/loungekey-logo.svg -alpha on \
+  -resize '320x116' -gravity center -extent 320x116 assets/logo@2x.png
+rm /tmp/loungekey-logo.svg
 ```
 
 The external URL and image are controlled by their owner and may change or

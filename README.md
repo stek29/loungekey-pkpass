@@ -44,6 +44,14 @@ PASS_SERVER_URL=https://passes.example.com \
 
 Wallet запрашивает `GET /v1/passes/pass.com.loungekey.membership/{username}`. Username хранится как `serialNumber`, пароль — в стандартном заголовке `Authorization: ApplePass …` в base64url. Сервер stateless и ничего не сохраняет.
 
+Откройте корень сервера в браузере, чтобы создать первый pass без CLI:
+
+```text
+https://passes.example.com/
+```
+
+Страница содержит обычную HTML-форму без JavaScript. После отправки сервер входит в LoungeKey и возвращает `.pkpass`; его `webServiceURL` автоматически совпадает с HTTP origin страницы. Логин и пароль не сохраняются.
+
 Проверка состояния: `GET /healthz`.
 
 ## Логотип

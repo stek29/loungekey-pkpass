@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"net/url"
@@ -120,14 +121,27 @@ func serve(arguments []string) error {
 type refreshHandler struct{ publicURL string }
 
 func (h *refreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-	if r.URL.Path == "/healthz" {
+	switch {
+	case r.URL.Path == "/" && r.Method == http.MethodGet:
+		h.serveForm(w, http.StatusOK, "", "")
+	case r.URL.Path == "/generate":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSONResponse(w, http.StatusMethodNotAllowed, `{"error":"method not allowed"}`)
+			return
+		}
+		h.generatePass(w, r)
+	case r.URL.Path == "/healthz" && r.Method == http.MethodGet:
 		writeJSONResponse(w, http.StatusOK, `{"status":"ok"}`)
-		return
+	case r.Method == http.MethodGet:
+		h.refreshPass(w, r)
+	default:
+		w.Header().Set("Allow", allowedMethods(r.URL.Path))
+		writeJSONResponse(w, http.StatusMethodNotAllowed, `{"error":"method not allowed"}`)
 	}
+}
+
+func (h *refreshHandler) refreshPass(w http.ResponseWriter, r *http.Request) {
 	prefix := "/v1/passes/" + passkit.PassTypeIdentifier + "/"
 	if !strings.HasPrefix(r.URL.Path, prefix) {
 		writeJSONResponse(w, http.StatusNotFound, `{"error":"not found"}`)
@@ -169,15 +183,7 @@ func (h *refreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(path)
 	baseURL := h.publicURL
 	if baseURL == "" {
-		protocol := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
-		if protocol == "" {
-			protocol = "http"
-		}
-		host := r.Header.Get("X-Forwarded-Host")
-		if host == "" {
-			host = r.Host
-		}
-		baseURL = protocol + "://" + host
+		baseURL = requestOrigin(r)
 	}
 	if err := passkit.Build(account, passkit.Options{SerialNumber: username, WebServiceURL: baseURL, AuthenticationToken: passkit.PasswordToken(password)}, path, ""); err != nil {
 		log.Printf("build pass: %v", err)
@@ -189,6 +195,133 @@ func (h *refreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	http.ServeFile(w, r, path)
 }
+
+func (h *refreshHandler) generatePass(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := r.ParseForm(); err != nil {
+		h.serveForm(w, http.StatusBadRequest, "Invalid form submission.", "")
+		return
+	}
+	username := strings.TrimSpace(r.PostFormValue("username"))
+	password := r.PostFormValue("password")
+	if username == "" || password == "" || len(username) > 256 || len(password) > 1024 {
+		h.serveForm(w, http.StatusBadRequest, "Username and password are required.", username)
+		return
+	}
+	client, err := loungekey.NewClient(30 * time.Second)
+	if err != nil {
+		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
+		return
+	}
+	account, err := client.Fetch(r.Context(), username, password)
+	if err != nil {
+		log.Printf("initial generation failed for %q: %v", username, err)
+		h.serveForm(w, http.StatusBadGateway, "Could not log in to LoungeKey.", username)
+		return
+	}
+	temp, err := os.CreateTemp("", "loungekey-*.pkpass")
+	if err != nil {
+		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
+		return
+	}
+	path := temp.Name()
+	if err := temp.Close(); err != nil {
+		os.Remove(path)
+		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
+		return
+	}
+	defer os.Remove(path)
+	options := passkit.Options{SerialNumber: username, WebServiceURL: requestOrigin(r), AuthenticationToken: passkit.PasswordToken(password)}
+	if err := passkit.Build(account, options, path, ""); err != nil {
+		log.Printf("build initial pass: %v", err)
+		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		h.serveForm(w, http.StatusInternalServerError, "Could not generate the pass.", username)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.pkpass")
+	w.Header().Set("Content-Disposition", `attachment; filename="loungekey.pkpass"`)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, "loungekey.pkpass", info.ModTime(), file)
+}
+
+func (h *refreshHandler) serveForm(w http.ResponseWriter, status int, message, username string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	if err := passForm.Execute(w, struct{ Message, Username string }{message, username}); err != nil {
+		log.Printf("render form: %v", err)
+	}
+}
+
+func requestOrigin(r *http.Request) string {
+	scheme := firstHeaderValue(r.Header.Get("X-Forwarded-Proto"))
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := firstHeaderValue(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	return scheme + "://" + host
+}
+
+func firstHeaderValue(value string) string { return strings.TrimSpace(strings.Split(value, ",")[0]) }
+func allowedMethods(path string) string {
+	if path == "/generate" {
+		return http.MethodPost
+	}
+	return http.MethodGet
+}
+
+var passForm = template.Must(template.New("pass-form").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoungeKey Pass</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f3f5f4; color: #24342d; }
+    main { width: min(24rem, calc(100% - 3rem)); padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 .5rem 2rem #1735261a; }
+    h1 { margin: 0 0 .5rem; font-size: 1.6rem; }
+    p { margin: 0 0 1.5rem; color: #526159; }
+    .error { color: #a12622; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; margin-top: .4rem; padding: .75rem; border: 1px solid #aab5af; border-radius: .5rem; font: inherit; background: white; color: #24342d; }
+    button { width: 100%; margin-top: 1.5rem; padding: .8rem; border: 0; border-radius: .5rem; background: #009245; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    @media (prefers-color-scheme: dark) { body { background: #14201a; color: #edf5f0; } main { background: #202e27; } p { color: #b7c5bd; } input { background: #14201a; color: #edf5f0; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LoungeKey Pass</h1>
+    <p>Sign in to generate an updateable wallet pass.</p>
+    {{if .Message}}<p class="error" role="alert">{{.Message}}</p>{{end}}
+    <form method="post" action="/generate">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" value="{{.Username}}" autocomplete="username" required maxlength="256">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+      <button type="submit">Generate pass</button>
+    </form>
+  </main>
+</body>
+</html>`))
+
 func writeJSONResponse(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

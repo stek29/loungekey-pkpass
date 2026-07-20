@@ -414,7 +414,10 @@ it("serves the same logo asset referenced by the form", async () => {
     new Request("https://passes.example/"),
     config(),
   );
-  expect(await form.text()).toContain('src="/pass-logo.png"');
+  const formHtml = await form.text();
+  expect(formHtml).toContain('src="/pass-logo.png"');
+  expect(formHtml).toContain("Independent, unofficial project");
+  expect(formHtml).toContain("not affiliated with");
 
   const logo = await handleRequest(
     new Request("https://passes.example/pass-logo.png"),

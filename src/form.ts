@@ -7,6 +7,9 @@ export const generationForm = `<!doctype html>
     <style>
       body { font: 16px system-ui; max-width: 30rem; margin: 4rem auto; padding: 0 1rem; }
       .pass-logo { display: block; max-width: 160px; max-height: 58px; margin: 0 0 2rem; }
+      .disclaimer { margin: 1.5rem 0; padding: 1rem; border: 1px solid #d1d5db; border-radius: 0.5rem; background: #f9fafb; }
+      .disclaimer strong { display: block; margin-bottom: 0.35rem; }
+      .disclaimer p { margin: 0; }
       label { display: block; margin: 1rem 0; }
       input { box-sizing: border-box; width: 100%; padding: 0.6rem; }
       button { padding: 0.65rem 1rem; }
@@ -16,6 +19,10 @@ export const generationForm = `<!doctype html>
     <main>
       <img class="pass-logo" src="/pass-logo.png" alt="Pass logo">
       <h1>Generate lounge access pass</h1>
+      <aside class="disclaimer" aria-label="Important disclaimer">
+        <strong>Independent, unofficial project</strong>
+        <p>This service is not affiliated with, endorsed by, or sponsored by Lounge Key Limited, Collinson Group, or any of their affiliates. Your credentials are submitted to this service and used to sign in to LoungeKey; they are not stored. Only continue if you trust the operator of this deployment.</p>
+      </aside>
       <form method="post" action="/generate">
         <label>Username<input name="username" autocomplete="username" required></label>
         <label>Password<input type="password" name="password" autocomplete="current-password" required></label>

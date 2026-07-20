@@ -2,6 +2,9 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-11",
+  // Old Worker versions can remain reachable through versioned preview URLs
+  // after their version and deployment records are deleted.
+  "preview_urls": false,
   "rules": [
     {
       "type": "CompiledWasm",

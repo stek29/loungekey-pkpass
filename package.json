@@ -17,19 +17,23 @@
   "dependencies": {
     "fflate": "0.8.3",
     "htmlparser2": "12.0.0",
-    "zxing-wasm": "3.1.0"
+    "zxing-wasm": "3.1.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.3",
-    "@cloudflare/vitest-pool-workers": "0.18.4",
-    "@cloudflare/workers-types": "5.20260711.1",
+    "@biomejs/biome": "2.5.7",
+    "@cloudflare/vitest-pool-workers": "0.20.2",
+    "@cloudflare/workers-types": "5.20260804.1",
     "@types/node": "24.13.3",
-    "sharp": "0.34.5",
+    "sharp": "0.35.3",
     "typescript": "7.0.2",
     "vitest": "4.1.10",
-    "wrangler": "4.110.0"
+    "wrangler": "4.119.0"
   },
   "engines": {
     "node": ">=24"
+  },
+  "overrides": {
+    "postcss": "8.5.26",
+    "undici": "7.29.0"
   }
 }

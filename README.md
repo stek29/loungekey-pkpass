@@ -22,8 +22,8 @@ complying with the terms that apply to their accounts and services.
 
 Open the service root and submit the HTML-only username/password form. The
 service signs in to LoungeKey and returns a `.pkpass` containing the current QR
-code and its own refresh URL. The form displays the same `logo.png` asset that
-will be embedded in the generated pass.
+code and its own refresh URL. Pass artwork is embedded only in generated passes
+and is not displayed or served by the landing page.
 
 The wallet refresh endpoint is:
 
@@ -56,12 +56,12 @@ npm run check
 npm test
 npm run test:worker
 npm run build:cloudflare
-npm run deploy -- --name <worker-name>
+npm run deploy
 ```
 
-The tracked Wrangler configuration contains no account ID, Worker name, route,
-domain, or credential. Wrangler deploys to the account selected by the invoking
-user. The Worker name is always supplied on the command line.
+The tracked Wrangler configuration names the Worker `zal-pass` and contains no
+account ID, route, custom domain, or credential. Wrangler deploys to the account
+selected by the invoking user.
 
 `npm run build:cloudflare` must run before every deploy because Wrangler serves
 static assets from the generated `.assets.deploy/` directory. Run it without the
@@ -168,7 +168,7 @@ use is permitted.
 ```bash
 PASS_LOGO_URL='https://example.com/logo.svg' \
 npm run build:cloudflare
-npm run deploy -- --name <worker-name>
+npm run deploy
 ```
 
 Mount the same generated assets into Docker:

@@ -31,8 +31,6 @@ export async function handleRequest(
       return textResponse("ok\n", 200);
     if (request.method === "GET" && url.pathname === "/")
       return htmlResponse(generationForm);
-    if (request.method === "GET" && url.pathname === "/pass-logo.png")
-      return await logoResponse(config);
     if (request.method === "POST" && url.pathname === "/generate")
       return await generate(request, config);
     if (request.method === "GET" && url.pathname.startsWith("/v1/passes/"))
@@ -205,18 +203,6 @@ function textResponse(body: string, status: number): Response {
 function htmlResponse(body: string): Response {
   return new Response(body, {
     headers: { ...noStoreHeaders, "Content-Type": "text/html; charset=utf-8" },
-  });
-}
-
-async function logoResponse(config: RuntimeConfig): Promise<Response> {
-  const logo = await config.assets.get("logo.png");
-  if (!logo) throw new HttpError(404, "pass logo not found");
-  return new Response(logo.buffer as ArrayBuffer, {
-    headers: {
-      ...noStoreHeaders,
-      "Content-Type": "image/png",
-      "X-Content-Type-Options": "nosniff",
-    },
   });
 }
 

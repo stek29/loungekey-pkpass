@@ -409,25 +409,6 @@ it("applies the shared login limiter to generation and refresh", async () => {
   expect(usernames).toEqual(["member", "member"]);
 });
 
-it("serves the same logo asset referenced by the form", async () => {
-  const form = await handleRequest(
-    new Request("https://passes.example/"),
-    config(),
-  );
-  const formHtml = await form.text();
-  expect(formHtml).toContain('src="/pass-logo.png"');
-  expect(formHtml).toContain("Independent, unofficial project");
-  expect(formHtml).toContain("not affiliated with");
-
-  const logo = await handleRequest(
-    new Request("https://passes.example/pass-logo.png"),
-    config(),
-  );
-  expect(logo.status).toBe(200);
-  expect(logo.headers.get("content-type")).toBe("image/png");
-  expect(new TextDecoder().decode(await logo.arrayBuffer())).toBe("logo.png");
-});
-
 it("regenerates a pass through the refresh route", async () => {
   let call = 0;
   const jpeg = await readFile(new URL("fixtures/qr.jpg", import.meta.url));

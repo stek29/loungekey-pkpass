@@ -13,9 +13,6 @@ it("serves routes inside workerd without exposing assets", async () => {
   const form = await SELF.fetch("https://worker.example/");
   expect(form.status).toBe(200);
   expect(await form.text()).toContain('<form method="post"');
-  const logo = await SELF.fetch("https://worker.example/pass-logo.png");
-  expect(logo.status).toBe(200);
-  expect((await logo.arrayBuffer()).byteLength).toBeGreaterThan(0);
 
   expect((await SELF.fetch("https://worker.example/icon.png")).status).toBe(
     404,

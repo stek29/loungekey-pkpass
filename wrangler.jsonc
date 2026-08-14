@@ -5,13 +5,6 @@
   // Old Worker versions can remain reachable through versioned preview URLs
   // after their version and deployment records are deleted.
   "preview_urls": false,
-  "rules": [
-    {
-      "type": "CompiledWasm",
-      "globs": ["**/*.wasm"],
-      "fallthrough": true
-    }
-  ],
   "assets": {
     "directory": "./.assets.deploy",
     "binding": "PASS_ASSETS",

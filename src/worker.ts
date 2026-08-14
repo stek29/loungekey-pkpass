@@ -1,13 +1,9 @@
-import readerWasm from "zxing-wasm/reader/zxing_reader.wasm";
 import { handleRequest } from "./app.js";
-import { usePrecompiledQrModule } from "./loungekey.js";
 import {
   type AssetProvider,
   defaultMetadata,
   resolveAppearance,
 } from "./model.js";
-
-usePrecompiledQrModule(readerWasm as unknown as WebAssembly.Module);
 
 interface Env {
   PASS_ASSETS: Fetcher;

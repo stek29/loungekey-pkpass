@@ -21,30 +21,38 @@ complying with the terms that apply to their accounts and services.
 ## How it works
 
 Open the service root and submit the HTML-only username/password form. The
-service signs in to LoungeKey and returns a `.pkpass` containing the current QR
-code and its own refresh URL. Pass artwork is embedded only in generated passes
-and is not displayed or served by the landing page.
+service signs in through the LoungeKey mobile API and returns a `.pkpass`
+containing the current digital membership barcode and its own refresh URL. Pass
+artwork is embedded only in generated passes and is not displayed or served by
+the landing page.
 
 The wallet refresh endpoint is:
 
 ```text
 GET /v1/passes/{passTypeIdentifier}/{username}
-Authorization: ApplePass {base64url-password}
+Authorization: ApplePass v2.{base64url-credentials}
 ```
 
-The username is the pass `serialNumber`. The base64url-encoded password is the
-pass `authenticationToken`. The service is stateless and does not store either
-credential, but anyone who obtains the pass can recover its password. Use HTTPS
-and never share generated passes.
+The username is the pass `serialNumber`. The versioned pass
+`authenticationToken` contains the mobile bearer token, its expiration time,
+and the account password. A valid bearer token is reused. When it expires or
+the API rejects it, the password is hashed as required by the current mobile
+login API and used to authenticate again. The returned pass contains the
+replacement token.
+
+The service is stateless and does not store these credentials, but anyone who
+obtains the pass can recover its password and access the account. Use HTTPS and
+never share generated passes. Passes made by versions of this project that used
+the unprefixed base64url password format are recognized and upgraded to the
+versioned format during their next refresh.
 
 Generated pass responses are marked `private` and `no-store` for clients,
 proxies, and Cloudflare so every refresh reaches LoungeKey. Health check:
 `GET /healthz`.
 
-Known LoungeKey benefit packages also add entitlement and visit summaries to
-the back of the pass. LoungeKey notes that visit history can take 3–5 days to
-appear and only includes the last 18 months. Unknown packages skip these
-optional requests and still produce a basic pass.
+The mobile allocation and visit APIs add entitlement and visit summaries to the
+back of the pass when available. Optional allocation or history failures still
+produce a basic pass.
 
 ## Cloudflare Workers
 
@@ -209,10 +217,7 @@ The project is licensed under the [BSD Zero Clause License](LICENSE).
 
 Runtime dependencies and bundled components retain their own licenses:
 
-- [zxing-wasm](https://github.com/Sec-ant/zxing-wasm): MIT; its bundled
-  ZXing-C++ code is Apache-2.0 and Zint components are BSD 3-Clause.
 - [fflate](https://github.com/101arrowz/fflate): MIT.
-- [htmlparser2](https://github.com/fb55/htmlparser2): MIT.
 
 Exact direct and transitive versions are recorded in `package-lock.json` and
 are not relicensed under the project's BSD Zero Clause License.

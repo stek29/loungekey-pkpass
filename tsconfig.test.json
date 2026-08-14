@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["node", "vitest/globals", "@types/emscripten"]
+    "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["src/worker.ts", "src/node.ts", "test/worker.test.ts"]

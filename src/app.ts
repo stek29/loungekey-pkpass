@@ -1,8 +1,17 @@
 import { generationForm } from "./form.js";
-import { fetchAccount } from "./loungekey.js";
-import type { RuntimeConfig } from "./model.js";
+import {
+  fetchAccount,
+  hashPassword,
+  login,
+  MobileAuthenticationError,
+} from "./loungekey.js";
+import type { Account, RuntimeConfig } from "./model.js";
 import { buildPass } from "./pass.js";
-import { decodePasswordToken, passwordToken } from "./token.js";
+import {
+  decodePassCredentials,
+  encodePassCredentials,
+  type PassCredentials,
+} from "./token.js";
 
 const noStoreHeaders: Record<string, string> = {
   "Cache-Control": "private, no-store, max-age=0",
@@ -66,19 +75,14 @@ async function generate(
   const password = form.get("password") ?? "";
   if (!username || !password)
     throw new HttpError(400, "username and password are required");
-  await enforceLoginLimit(request, config, username);
-  const account = await fetchAccount(
-    config.fetch,
-    username,
-    password,
-    config.clientIp(request),
-  );
+  const credentials = await mobileLogin(request, config, username, password);
+  const account = await fetchAccount(config.fetch, credentials.accessToken);
   const pass = await buildPass(
     account,
     {
       serialNumber: username,
       webServiceUrl: requestOrigin(request, config),
-      authenticationToken: passwordToken(password),
+      authenticationToken: encodePassCredentials(credentials),
       metadata: config.metadata,
       appearance: config.appearance,
     },
@@ -99,33 +103,60 @@ async function refresh(
   if (passTypeIdentifier !== config.metadata.passTypeIdentifier)
     throw new HttpError(404, "not found");
   const authorization = request.headers.get("authorization") ?? "";
-  const match = /^ApplePass ([A-Za-z0-9_-]+)$/.exec(authorization);
+  const match = /^ApplePass ((?:v2\.)?[A-Za-z0-9_-]+)$/.exec(authorization);
   if (!match?.[1]) throw new HttpError(401, "invalid authorization");
-  let password: string;
+  let decoded: ReturnType<typeof decodePassCredentials>;
   try {
-    password = decodePasswordToken(match[1]);
+    decoded = decodePassCredentials(match[1]);
   } catch {
     throw new HttpError(401, "invalid authorization");
   }
-  await enforceLoginLimit(request, config, username);
-  const account = await fetchAccount(
-    config.fetch,
-    username,
-    password,
-    config.clientIp(request),
-  );
+  const password =
+    decoded.type === "legacy" ? decoded.password : decoded.credentials.password;
+  let credentials =
+    decoded.type === "current" ? decoded.credentials : undefined;
+  let account: Account | undefined;
+  if (credentials && credentials.expiresAt > Date.now() + 60_000) {
+    try {
+      account = await fetchAccount(config.fetch, credentials.accessToken);
+    } catch (error) {
+      if (!(error instanceof MobileAuthenticationError)) throw error;
+    }
+  }
+  if (!account) {
+    credentials = await mobileLogin(request, config, username, password);
+    account = await fetchAccount(config.fetch, credentials.accessToken);
+  }
+  if (!credentials) throw new Error("mobile credentials are unavailable");
   const pass = await buildPass(
     account,
     {
       serialNumber: username,
       webServiceUrl: requestOrigin(request, config),
-      authenticationToken: match[1],
+      authenticationToken: encodePassCredentials(credentials),
       metadata: config.metadata,
       appearance: config.appearance,
     },
     config.assets,
   );
   return passResponse(pass, username);
+}
+
+async function mobileLogin(
+  request: Request,
+  config: RuntimeConfig,
+  username: string,
+  password: string,
+): Promise<PassCredentials> {
+  await enforceLoginLimit(request, config, username);
+  const passwordHash = await hashPassword(password);
+  const token = await login(
+    config.fetch,
+    username,
+    passwordHash,
+    config.clientIp(request),
+  );
+  return { ...token, password };
 }
 
 async function enforceLoginLimit(

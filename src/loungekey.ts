@@ -1,437 +1,279 @@
-import type { Element } from "domhandler";
-import { DomUtils, parseDocument } from "htmlparser2";
-import { prepareZXingModule, readBarcodes } from "zxing-wasm/reader";
 import type { Account, Entitlement, VisitSummary } from "./model.js";
 
-const loginUrl = "https://www.loungekey.com/en/login";
-const loginApiUrl =
-  "https://www.loungekey.com/api/loungekey/lkaccount/login?sc_site=loungekey";
-const userAgent = "loungekey-pkpass/3.0";
-const monthNumbers = new Map(
-  [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ].map((month, index) => [month, index + 1]),
-);
+const tokenUrl = "https://lbapi.prod.cloud-te-collinson.com/api/v1/admin/token";
+const consumerApiUrl = "https://api.te-collinson.com/prioritypass/v1/consumer/";
+const userAgent = "loungekey-pkpass/4.0";
 
-class CookieJar {
-  readonly #cookies = new Map<string, string>();
-
-  capture(headers: Headers): void {
-    const rawValues =
-      (
-        headers as Headers & { getSetCookie?: () => string[] }
-      ).getSetCookie?.() ?? splitSetCookie(headers.get("set-cookie"));
-    const values = rawValues.flatMap((value) => splitSetCookie(value));
-    for (const value of values) {
-      const pair = value.split(";", 1)[0];
-      const separator = pair?.indexOf("=") ?? -1;
-      if (pair && separator > 0)
-        this.#cookies.set(
-          pair.slice(0, separator).trim(),
-          pair.slice(separator + 1).trim(),
-        );
-    }
-  }
-
-  header(): string {
-    return [...this.#cookies]
-      .map(([name, value]) => `${name}=${value}`)
-      .join("; ");
-  }
+export interface MobileToken {
+  accessToken: string;
+  expiresAt: number;
 }
 
-function splitSetCookie(value: string | null): string[] {
-  if (!value) return [];
-  return value.split(/,(?=\s*[^;,=\s]+=[^;,]*)/);
+export class MobileAuthenticationError extends Error {}
+
+interface UserInfo {
+  CardholderName?: unknown;
+  CurrentDMCBarcode?: unknown;
+  MembershipExpiry?: unknown;
+  MembershipNumber?: unknown;
+  MembershipStart?: unknown;
+  ObfuscatedPan?: unknown;
 }
 
-async function loungeFetch(
+interface ChargeData {
+  MemberChargeVisitfee?: unknown;
+  MemberChargeVisitFeeCurrency?: unknown;
+}
+
+interface AllocationParty {
+  Entitlement?: unknown;
+  Remaining?: unknown;
+  MemberChargeData?: ChargeData;
+}
+
+interface Allocation {
+  AllocationType?: unknown;
+  Guest?: AllocationParty;
+  Member?: AllocationParty;
+  ValidTo?: unknown;
+}
+
+interface RealtimeAllocation {
+  Balance?: { Allocations?: unknown };
+}
+
+interface Visit {
+  LoungeCode?: unknown;
+  TotalVisitors?: unknown;
+  VisitDate?: unknown;
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  if (!password) throw new Error("password is required");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(password),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
+}
+
+export async function login(
   fetcher: typeof fetch,
-  jar: CookieJar,
-  url: string,
-  init: RequestInit = {},
-): Promise<Response> {
-  const headers = new Headers(init.headers);
-  headers.set("User-Agent", userAgent);
-  const cookie = jar.header();
-  if (cookie) headers.set("Cookie", cookie);
-  const response = await fetcher(url, {
-    ...init,
-    headers,
-    redirect: "manual",
+  username: string,
+  passwordHash: string,
+  clientIp?: string,
+): Promise<MobileToken> {
+  if (!username || !/^[0-9A-F]{64}$/.test(passwordHash))
+    throw new Error("username and password hash are required");
+  const body = new URLSearchParams({
+    clientId: "mobileApp",
+    clientSecret: "clientSecret",
+    grantType: "password",
+    password: passwordHash,
+    productCode: "LK",
+    username,
+  });
+  const response = await fetcher(tokenUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": userAgent,
+      ...(clientIp ? { "X-LoungeKey-Pkpass-Client-IP": clientIp } : {}),
+    },
+    body: body.toString(),
     signal: AbortSignal.timeout(20_000),
   });
-  jar.capture(response.headers);
-  return response;
+  if (!response.ok)
+    throw new MobileAuthenticationError(
+      `LoungeKey mobile login returned ${response.status}`,
+    );
+  const result = (await response.json()) as {
+    access_token?: unknown;
+    expires_in?: unknown;
+    token_type?: unknown;
+  };
+  if (
+    typeof result.access_token !== "string" ||
+    !result.access_token ||
+    result.token_type !== "bearer" ||
+    typeof result.expires_in !== "number" ||
+    !Number.isFinite(result.expires_in) ||
+    result.expires_in <= 0
+  ) {
+    throw new Error("invalid LoungeKey mobile login response");
+  }
+  return {
+    accessToken: result.access_token,
+    expiresAt: Date.now() + result.expires_in * 1_000,
+  };
 }
 
 export async function fetchAccount(
   fetcher: typeof fetch,
-  username: string,
-  password: string,
-  clientIp?: string,
+  accessToken: string,
 ): Promise<Account> {
-  if (!username || !password)
-    throw new Error("username and password are required");
-  const jar = new CookieJar();
-  const loginPage = await loungeFetch(fetcher, jar, loginUrl);
-  if (!loginPage.ok)
-    throw new Error(`LoungeKey login page returned ${loginPage.status}`);
-  await loginPage.body?.cancel();
-
-  const login = await loungeFetch(fetcher, jar, loginApiUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Referer: loginUrl,
-      "X-Requested-With": "XMLHttpRequest",
-      ...(clientIp ? { "X-LoungeKey-Pkpass-Client-IP": clientIp } : {}),
-    },
-    body: JSON.stringify({
-      TimezoneOffset: String(new Date().getTimezoneOffset()),
-      Username: username,
-      Password: password,
-    }),
-  });
-  if (!login.ok) throw new Error(`LoungeKey login returned ${login.status}`);
-  const result = (await login.json()) as {
-    RedirectUrl?: unknown;
-    Success?: unknown;
-  };
-  if (
-    result.Success !== true ||
-    typeof result.RedirectUrl !== "string" ||
-    !result.RedirectUrl
-  ) {
-    throw new Error("LoungeKey login failed");
-  }
-
-  const dashboardUrl = new URL(result.RedirectUrl, loginUrl);
-  if (dashboardUrl.origin !== new URL(loginUrl).origin)
-    throw new Error("LoungeKey returned an invalid dashboard URL");
-  const dashboard = await loungeFetch(fetcher, jar, dashboardUrl.href);
-  if (!dashboard.ok)
-    throw new Error(`LoungeKey dashboard returned ${dashboard.status}`);
-  const dashboardHtml = await dashboard.text();
-  const packageType = detectAccountType(dashboardUrl);
-  let entitlement: Entitlement = { type: "unknown" };
-  if (packageType === "unlimited") {
-    const visits = await fetchVisits(fetcher, jar, dashboardUrl);
-    entitlement = {
-      type: "unlimited",
-      ...visits,
-      ...optionalValue("guestFee", parseVisitFee(dashboardHtml)),
-    };
-  } else if (packageType === "limited") {
-    const benefits = await fetchBenefits(fetcher, jar, dashboardUrl);
-    if (benefits) {
-      const visits = await fetchVisits(fetcher, jar, dashboardUrl);
-      entitlement = {
-        type: "limited",
-        ...benefits,
-        ...visits,
-        ...optionalValue("additionalVisitFee", parseVisitFee(dashboardHtml)),
-      };
-    }
-  }
-  return parseDashboard(dashboardHtml, entitlement, new Date().toISOString());
+  if (!accessToken) throw new MobileAuthenticationError("token is required");
+  const user = await fetchRequired<UserInfo>(fetcher, accessToken, "userInfo");
+  const [allocation, visits] = await Promise.all([
+    fetchOptional<RealtimeAllocation>(
+      fetcher,
+      accessToken,
+      "realtimeAllocation",
+    ),
+    fetchOptional<Visit[]>(fetcher, accessToken, "visits"),
+  ]);
+  return parseAccount(user, allocation, visits, new Date().toISOString());
 }
 
-export type AccountType = "unlimited" | "limited" | "unknown";
-
-export function detectAccountType(url: URL): AccountType {
-  const match = /^\/(?:[a-z]{2}\/)?([^/]+)\/dashboard\/my-account\/?$/.exec(
-    url.pathname,
-  );
-  if (match?.[1] === "unlimitedch-kaz") return "unlimited";
-  if (match?.[1] === "10ch-kaz") return "limited";
-  return "unknown";
-}
-
-export async function parseDashboard(
-  html: string,
-  entitlement: Entitlement = { type: "unknown" },
+export function parseAccount(
+  user: UserInfo,
+  allocation?: RealtimeAllocation,
+  visits?: Visit[],
   lastUpdated = new Date().toISOString(),
-): Promise<Account> {
-  const document = parseDocument(html);
-  const elements = DomUtils.findAll(() => true, document.children).filter(
-    (node): node is Element => node.type === "tag",
-  );
-  const field = (label: string): string => {
-    for (const element of elements) {
-      if (element.name !== "li") continue;
-      const strong = DomUtils.findOne(
-        (node) => node.type === "tag" && (node as Element).name === "strong",
-        element.children,
-      );
-      if (
-        strong &&
-        normalize(DomUtils.textContent(strong)).toLowerCase() ===
-          label.toLowerCase()
-      ) {
-        const full = normalize(DomUtils.textContent(element));
-        const heading = normalize(DomUtils.textContent(strong));
-        const value = full.slice(heading.length).trim();
-        if (value) return value;
-      }
-    }
-    throw new Error(`LoungeKey dashboard field not found: ${label}`);
-  };
-
-  const qr = elements.find(
-    (element) =>
-      element.name === "img" &&
-      element.attribs.class?.split(/\s+/).includes("qr-code"),
-  );
-  const source = qr?.attribs.src;
-  if (!source) throw new Error("LoungeKey QR image was not found");
-  const card = field("Card Details");
-  if (card.length < 4) throw new Error("invalid LoungeKey card details");
+): Account {
+  const obfuscatedPan = requiredString(user.ObfuscatedPan, "ObfuscatedPan");
+  const last4 = /(\d{4})$/.exec(obfuscatedPan)?.[1];
+  if (!last4) throw new Error("invalid LoungeKey ObfuscatedPan");
   return {
-    name: field("Name on card"),
-    loungeNumber: field("Lounge Access Number"),
-    cardLast4: card.slice(-4),
-    expiration: parseWebsiteDate(field("Card Expiration Date")),
-    dateAdded: parseWebsiteDate(field("Date Card Added")),
-    qrMessage: await decodeQrDataUrl(source),
-    entitlement,
+    name: requiredString(user.CardholderName, "CardholderName"),
+    loungeNumber: requiredString(user.MembershipNumber, "MembershipNumber"),
+    cardLast4: last4,
+    expiration: parseApiDate(user.MembershipExpiry, "MembershipExpiry"),
+    dateAdded: parseApiDate(user.MembershipStart, "MembershipStart"),
+    qrMessage: requiredString(user.CurrentDMCBarcode, "CurrentDMCBarcode"),
+    entitlement: parseEntitlement(allocation, visits),
     lastUpdated,
   };
 }
 
-async function fetchBenefits(
-  fetcher: typeof fetch,
-  jar: CookieJar,
-  dashboardUrl: URL,
-): Promise<
-  | Pick<Extract<Entitlement, { type: "limited" }>, "remainingVisits" | "ends">
-  | undefined
-> {
-  try {
-    const response = await loungeFetch(
-      fetcher,
-      jar,
-      new URL("my-benefits", dashboardUrl).href,
-    );
-    if (!response.ok) return undefined;
-    return parseBenefits(await response.text());
-  } catch {
-    return undefined;
-  }
-}
-
-async function fetchVisits(
-  fetcher: typeof fetch,
-  jar: CookieJar,
-  dashboardUrl: URL,
-): Promise<Partial<VisitSummary>> {
-  try {
-    const response = await loungeFetch(
-      fetcher,
-      jar,
-      new URL("visit-history", dashboardUrl).href,
-    );
-    if (!response.ok) return {};
-    return parseVisitHistory(await response.text());
-  } catch {
-    return {};
-  }
-}
-
-export function parseBenefits(
-  html: string,
-): Pick<Extract<Entitlement, { type: "limited" }>, "remainingVisits" | "ends"> {
-  const document = parseDocument(html);
-  const texts = elementTexts(html);
-  const memberArticle = DomUtils.findOne((node) => {
-    if (node.type !== "tag" || (node as Element).name !== "article")
-      return false;
-    const heading = DomUtils.findOne(
-      (child) => child.type === "tag" && (child as Element).name === "h3",
-      (node as Element).children,
-    );
-    return normalize(DomUtils.textContent(heading ?? [])) === "Member visits";
-  }, document.children);
-  const graph = memberArticle
-    ? DomUtils.findOne(
-        (node) =>
-          node.type === "tag" &&
-          (node as Element).attribs.class
-            ?.split(/\s+/)
-            .includes("entitlement-graph") === true,
-        memberArticle.children,
+function parseEntitlement(
+  response: RealtimeAllocation | undefined,
+  visits: Visit[] | undefined,
+): Entitlement {
+  const allocations = response?.Balance?.Allocations;
+  const visitAllocation = Array.isArray(allocations)
+    ? (allocations as Allocation[]).find(
+        ({ AllocationType }) => AllocationType === "VISIT",
       )
     : undefined;
-  const remaining = graph?.attribs["data-available"];
-  const ends = texts
-    .map((text) => /Ends:\s*(\d{2} [A-Z][a-z]{2} \d{4})\b/.exec(text))
-    .find((match) => match?.[1]);
-  if (!remaining || !/^\d+$/.test(remaining) || !ends?.[1])
-    throw new Error("invalid LoungeKey benefits");
+  const member = visitAllocation?.Member;
+  if (!visitAllocation || !member) return { type: "unknown" };
+  const summary = parseVisits(visits);
+  const guestFee = parseFee(visitAllocation.Guest?.MemberChargeData);
+  if (member.Entitlement === "INFINITE") {
+    return {
+      type: "unlimited",
+      ...summary,
+      ...(guestFee ? { guestFee } : {}),
+    };
+  }
+  const remaining = integerValue(member.Remaining);
+  if (remaining === undefined) return { type: "unknown" };
+  const additionalVisitFee = parseFee(member.MemberChargeData) ?? guestFee;
   return {
-    remainingVisits: Number(remaining),
-    ends: parseWebsiteDate(ends[1]),
+    type: "limited",
+    remainingVisits: remaining,
+    ends: parseApiDate(visitAllocation.ValidTo, "allocation ValidTo"),
+    ...summary,
+    ...(additionalVisitFee ? { additionalVisitFee } : {}),
   };
 }
 
-export function parseVisitHistory(html: string): VisitSummary {
-  const document = parseDocument(html);
-  const rows = DomUtils.findAll(
-    (node) => node.type === "tag" && (node as Element).name === "tr",
-    document.children,
-  );
-  let headers: string[] | undefined;
-  const visits: Array<{ date: string; loungeCode: string; total: number }> = [];
-  for (const row of rows) {
-    const cells = DomUtils.findAll(
-      (node) =>
-        node.type === "tag" &&
-        ((node as Element).name === "th" || (node as Element).name === "td"),
-      row.children,
-    );
-    const values = cells.map((cell) => normalize(DomUtils.textContent(cell)));
-    if (cells.some((cell) => cell.name === "th")) {
-      headers = values.map((value) => value.toLowerCase());
-      continue;
-    }
-    if (!headers || values.length === 0) continue;
-    const value = (heading: string): string | undefined => {
-      const index = headers?.indexOf(heading.toLowerCase()) ?? -1;
-      return index >= 0 ? values[index] : undefined;
-    };
-    const rawDate = value("Visit date");
-    const loungeIndex = headers.indexOf("lounge code");
-    const loungeCell = loungeIndex >= 0 ? cells[loungeIndex] : undefined;
-    const loungeLabel = loungeCell
-      ? DomUtils.findOne(
-          (node) =>
-            node.type === "tag" &&
-            (node as Element).attribs.class
-              ?.split(/\s+/)
-              .includes("table-tooltip-text") === true,
-          loungeCell.children,
-        )
-      : undefined;
-    const loungeCode = loungeLabel
-      ? normalize(DomUtils.textContent(loungeLabel))
-      : value("Lounge Code");
-    const rawTotal = value("Total customer & guest visits");
-    if (!rawDate || !loungeCode || !/^\d+$/.test(rawTotal ?? ""))
-      throw new Error("invalid LoungeKey visit history");
-    visits.push({
-      date: parseWebsiteDate(rawDate),
-      loungeCode,
-      total: Number(rawTotal),
-    });
-  }
-  const latest = visits.toSorted((left, right) =>
+function parseVisits(visits: Visit[] | undefined): Partial<VisitSummary> {
+  if (!Array.isArray(visits)) return {};
+  const parsed = visits.map((visit) => ({
+    date: parseApiDate(visit.VisitDate, "visit VisitDate"),
+    loungeCode: requiredString(visit.LoungeCode, "visit LoungeCode"),
+    total: integerValue(visit.TotalVisitors),
+  }));
+  if (parsed.some(({ total }) => total === undefined))
+    throw new Error("invalid LoungeKey visit TotalVisitors");
+  const latest = parsed.toSorted((left, right) =>
     right.date.localeCompare(left.date),
   )[0];
   return {
-    recordedVisits: visits.reduce((sum, visit) => sum + visit.total, 0),
+    recordedVisits: parsed.reduce((sum, { total }) => sum + (total ?? 0), 0),
     ...(latest
       ? { lastVisit: { date: latest.date, loungeCode: latest.loungeCode } }
       : {}),
   };
 }
 
-function parseVisitFee(html: string): string | undefined {
-  const match = elementTexts(html)
-    .map((text) => /\bUS\$(\d+(?:\.\d{1,2})?)\b/.exec(text))
-    .find((candidate) => candidate?.[1]);
-  return match?.[1] ? `US$${match[1]} per visit` : undefined;
+function parseFee(data: ChargeData | undefined): string | undefined {
+  const amount =
+    typeof data?.MemberChargeVisitfee === "string"
+      ? data.MemberChargeVisitfee
+      : undefined;
+  const currency =
+    typeof data?.MemberChargeVisitFeeCurrency === "string"
+      ? data.MemberChargeVisitFeeCurrency
+      : undefined;
+  if (!amount || !currency || !/^\d+(?:\.\d{1,2})?$/.test(amount))
+    return undefined;
+  const prefix = currency === "USD" ? "US$" : `${currency} `;
+  return `${prefix}${amount} per visit`;
 }
 
-function elementTexts(html: string): string[] {
-  const document = parseDocument(html);
-  return DomUtils.findAll(() => true, document.children)
-    .filter((node): node is Element => node.type === "tag")
-    .map((element) => normalize(DomUtils.textContent(element)));
+function integerValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+    return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return undefined;
 }
 
-function optionalValue<Key extends string>(
-  key: Key,
-  value: string | undefined,
-): { [Property in Key]?: string } {
-  return value === undefined
-    ? {}
-    : ({ [key]: value } as { [Property in Key]: string });
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value)
+    throw new Error(`invalid LoungeKey ${field}`);
+  return value;
 }
 
-function normalize(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function parseWebsiteDate(value: string): string {
-  const match = /^(\d{2}) ([A-Z][a-z]{2}) (\d{4})$/.exec(value);
-  const month = match ? monthNumbers.get(match[2] ?? "") : undefined;
-  if (!match || !month) throw new Error("invalid LoungeKey date");
-  const day = Number(match[1]);
-  const year = Number(match[3]);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
+function parseApiDate(value: unknown, field: string): string {
+  const source = requiredString(value, field);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T/.exec(source);
+  if (!match) throw new Error(`invalid LoungeKey ${field}`);
+  const date = `${match[1]}-${match[2]}-${match[3]}`;
+  const parsed = new Date(`${date}T00:00:00Z`);
   if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
+    Number.isNaN(parsed.valueOf()) ||
+    parsed.toISOString().slice(0, 10) !== date
   )
-    throw new Error("invalid LoungeKey date");
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    throw new Error(`invalid LoungeKey ${field}`);
+  return date;
 }
 
-export async function decodeQrDataUrl(source: string): Promise<string> {
-  const match = /^data:image(?:\/(?:jpeg|jpg))?;base64,([A-Za-z0-9+/=]+)$/.exec(
-    source,
-  );
-  if (!match?.[1]) throw new Error("invalid LoungeKey QR image data URL");
-  let bytes: Uint8Array;
-  try {
-    bytes = Uint8Array.from(atob(match[1]), (character) =>
-      character.charCodeAt(0),
-    );
-  } catch {
-    throw new Error("invalid LoungeKey QR image data URL");
-  }
-  const results = await readBarcodes(bytes, {
-    formats: ["QRCode"],
-    maxNumberOfSymbols: 1,
-    tryHarder: true,
-  });
-  if (results.length !== 1 || !results[0]?.text)
-    throw new Error("could not decode LoungeKey QR image");
-  return results[0].text;
-}
-
-export function usePrecompiledQrModule(module: WebAssembly.Module): void {
-  prepareZXingModule({
-    overrides: {
-      instantiateWasm(imports, successCallback) {
-        const wasm = (
-          globalThis as unknown as {
-            WebAssembly: {
-              Instance: new (
-                module: WebAssembly.Module,
-                imports?: object,
-              ) => { exports: Record<string, unknown> };
-            };
-          }
-        ).WebAssembly;
-        const instance = new wasm.Instance(module, imports);
-        successCallback(instance as Parameters<typeof successCallback>[0]);
-        return instance.exports as never;
-      },
+async function fetchRequired<Result>(
+  fetcher: typeof fetch,
+  accessToken: string,
+  endpoint: string,
+): Promise<Result> {
+  const response = await fetcher(new URL(endpoint, consumerApiUrl), {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": userAgent,
     },
+    signal: AbortSignal.timeout(20_000),
   });
+  if (response.status === 401 || response.status === 403)
+    throw new MobileAuthenticationError("LoungeKey mobile token is invalid");
+  if (!response.ok)
+    throw new Error(`LoungeKey mobile ${endpoint} returned ${response.status}`);
+  return (await response.json()) as Result;
 }
 
-export { CookieJar };
+async function fetchOptional<Result>(
+  fetcher: typeof fetch,
+  accessToken: string,
+  endpoint: string,
+): Promise<Result | undefined> {
+  try {
+    return await fetchRequired<Result>(fetcher, accessToken, endpoint);
+  } catch (error) {
+    if (error instanceof MobileAuthenticationError) throw error;
+    return undefined;
+  }
+}

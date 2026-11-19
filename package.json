@@ -19,19 +19,21 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
-    "@cloudflare/vitest-pool-workers": "0.20.2",
-    "@cloudflare/workers-types": "5.20260804.1",
+    "@cloudflare/vitest-pool-workers": "0.23.0",
+    "@cloudflare/workers-types": "5.20261119.1",
     "@types/node": "24.13.3",
-    "sharp": "0.35.3",
+    "sharp": "0.35.5",
     "typescript": "7.0.2",
-    "vitest": "4.1.10",
-    "wrangler": "4.119.0"
+    "vitest": "4.1.12",
+    "wrangler": "4.165.0"
   },
   "engines": {
     "node": ">=24"
   },
   "overrides": {
     "postcss": "8.5.26",
-    "undici": "7.29.0"
+    "sharp": "$sharp",
+    "undici": "7.30.2",
+    "zod": "4.6.7"
   }
 }
